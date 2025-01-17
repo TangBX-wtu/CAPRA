@@ -33,7 +33,8 @@ def track_aliases(cpg: nx.MultiDiGraph, start_node: str, visited=None) -> Set[st
     visited.add(start_node)
     if start_node in [None, '']:
         return set()
-    aliases = {get_var_name(cpg, start_node)}
+    # aliases = {get_var_name(cpg, start_node)}
+    aliases = {start_node}
 
     for neighbor in cpg.neighbors(start_node):
         if neighbor not in visited:
@@ -141,11 +142,16 @@ def are_argument_alias(cpg: nx.MultiDiGraph, source_node_id: str, argument_node_
 
 
 def are_same_var(cpg: nx.MultiDiGraph, source_node_id: str, target_node_id: str) -> bool:
+    # print(f"{source_node_id} {target_node_id}")
+    if source_node_id == target_node_id:
+        return True
     # 首先根据全局变量和局部变量判断是否是同一个变量
     if are_same_local_member_var(cpg, source_node_id, target_node_id):
+        # print(f"{source_node_id} and {target_node_id} are same local mamber var")
         return True
     # 如果是通过函数变量传递方式产生的别名也认为是同一个变量
     if are_argument_alias(cpg, source_node_id, target_node_id):
+        # print(f"{source_node_id} and {target_node_id} are same argument alias")
         return True
     # 如果不是同一个变量，则判断是否是别名
     source_aliases = track_aliases(cpg, source_node_id)
@@ -154,6 +160,7 @@ def are_same_var(cpg: nx.MultiDiGraph, source_node_id: str, target_node_id: str)
     # print(f"The aliases of target node {target_node_id} are {target_aliases}")
     intersection = source_aliases.intersection(target_aliases)
     intersection.discard(None)
+    # print(f'Test {nx.has_path(cpg, source_node_id, target_node_id)}')
     return bool(intersection)
 
 
@@ -167,25 +174,11 @@ def is_condition_structure(cpg: nx.MultiDiGraph, node_id: str) -> bool:
 
 
 def has_condition_node_in_path(cpg: nx.MultiDiGraph, source_node: str, target_node: str) -> bool:
-    for path in nx.all_simple_paths(cpg, source_node, target_node):
+    for path in nx.all_simple_paths(cpg, source_node, target_node, cutoff=10):
         for node in path:
             if is_condition_structure(cpg, node):
                 return True
     return False
-
-
-# 迭代获取节点node的全部前驱节点
-def get_all_predecessors(cpg: nx.MultiDiGraph, node_id: str, visited: Set[str] = None) -> Set[str]:
-    if visited is None:
-        visited = set()
-
-    predecessors = set(cpg.predecessors(node_id)) - visited
-    visited.update(predecessors)
-
-    for pred in predecessors:
-        visited.update(get_all_predecessors(cpg, pred, visited))
-
-    return visited
 
 
 # 创建节点和对应文件的映射，对于大型图可能导致内存不足
@@ -194,19 +187,38 @@ def get_nodes_to_file(cpg: nx.MultiDiGraph) -> dict:
     for node in cpg.nodes():
         if node in nodes_to_file:
             continue
-        all_predecessors = get_all_predecessors(cpg, node)
-        for pred in all_predecessors:
-            if 'FILENAME' in cpg.nodes[pred]:
-                nodes_to_file[node] = cpg.nodes[pred].get('FILENAME')
+        if 'FILENAME' in cpg.nodes[node]:
+            nodes_to_file[node] = cpg.nodes[node].get('FILENAME')
+            continue
+
+        # 通过BFS搜索最近的FILENAME节点
+        queue = [node]
+        visited = {node}
+        while queue:
+            current_node = queue.pop(0)
+            for neighbor in list(cpg.predecessors(current_node)) + list(cpg.successors(current_node)):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    if 'FILENAME' in cpg.nodes[neighbor]:
+                        nodes_to_file[node] = cpg.nodes[neighbor].get('FILENAME')
+                        break
+                    queue.append(neighbor)
+        # 如果当前节点没有找到对应filename，则赋值空
+        if node not in nodes_to_file:
+            nodes_to_file[node] = '<empty>'
+
     return nodes_to_file
 
 
 # 判断node是否属于指定文件
 def is_node_in_file(nodes_to_file: dict, node_id: str, file_name: str) -> bool:
     if node_id not in nodes_to_file:
+        print(f"Node id {node_id} not in nodes_to_file")
         return False
+    # print(f"Test nodes_to_file is {nodes_to_file}")
     node_file = nodes_to_file[node_id]
     # print(f"node {node_id} is in file {node_file}")
+    # print(f"Test node_file is {node_file}, file name is {file_name}")
     if node_file in file_name or file_name in node_file:
         return True
     return False
@@ -230,6 +242,7 @@ def get_var_name_node(cpg: nx.MultiDiGraph, node_id: str):
 def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes: list) -> str:
     res_node = ''
     is_equal = False
+    max_node = int(len(cpg.nodes)) + 1
     if func_type == 'release':
         # 如果是函数调用，则找到这个函数的内部，然后确认是否有一个入参（当前我们只考虑一个情况，类似Hypo的figure 7）
         # 找到函数定义在cpg中的位置，找到对应入参的node，然后分析后面路径上是否被释放，如果被释放则认为这个间接调用也是释放
@@ -254,7 +267,7 @@ def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes:
                         # print(f'Test, find source code of {func_name}')
                         current = str(int(node) + 3)
                         while True:
-                            # print(cpg.nodes[current])
+                            # print(f"Test {cpg.nodes[current]}")
                             # TBD：改成data_check()
                             if (cpg.nodes[current].get('label', 'Unknown') == 'CALL'
                                     and cpg.nodes[current].get('METHOD_FULL_NAME', 'Unknown') in ['free', 'kfree']):
@@ -264,7 +277,7 @@ def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes:
                                     print(f'Find indirect call {func_name}')
                                     is_equal = True
                                     break
-                            if cpg.nodes[current].get('label', 'Unknown') == 'BINDING':
+                            if cpg.nodes[current].get('label', 'Unknown') == 'BINDING' or int(current) + 1 >= max_node:
                                 break
                             current = str(int(current) + 1)
         else:
@@ -272,7 +285,45 @@ def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes:
                   f"please pay attention to following operation.")
     # elif func_type == 'malloc': 从风险的角度暂时不考虑间接的内存分配
     if is_equal:
-        # print('Test func end')
         return res_node
     else:
         return ''
+
+
+def is_memory_operation(cpg: nx.MultiDiGraph, node_id: str) -> bool:
+    node_type = cpg.nodes[node_id].get('label', 'Unknown')
+    node_name = cpg.nodes[node_id].get('NAME', 'Unknown')
+    node_code = cpg.nodes[node_id].get('CODE', 'Unknown')
+    if node_type in ['CALL', 'IDENTIFIER']:
+        # 检查是否是内存操作函数（不考虑内存的重新分配）
+        if node_type == 'CALL':
+            # TBD：改成data_check()
+            memory_funcs = ['memcpy', 'memmove', '<operator>.pointerCall']
+            if node_name in memory_funcs:
+                return True
+        # 判读是否是指针操作
+        if '*' in node_code or '->' in node_code:
+            return True
+        # 判断是否是地址操作
+        if '&' in node_code:
+            return True
+        # 判断是否是数组操作
+        if '[' in node_code and ']' in node_code:
+            return True
+    # 判断相邻节点是否有内存相关操作
+    for neighbor in cpg.neighbors(node_id):
+        if (cpg.nodes[neighbor].get('label', 'Unknown') == 'MEMBER'
+                and cpg.nodes[neighbor].get('TYPE_FULL_NAME', 'Unknown').endswith('*')):
+            return True
+    return False
+
+
+def get_var_operation_node(cpg: nx.MultiDiGraph, matching_nodes: list):
+    node_id = ''
+    var_name = ''
+    for node, data in matching_nodes:
+        if is_memory_operation(cpg, node):
+            var_name, node_id = get_var_name_node(cpg, node)
+            if var_name is not None and node_id is not None:
+                return node_id, var_name
+    return node_id, var_name

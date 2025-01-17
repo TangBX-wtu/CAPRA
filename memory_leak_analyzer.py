@@ -2,7 +2,8 @@ import networkx as nx
 import unidiff
 from typing import Dict, Set, Tuple
 
-from static_analyze_util import data_check, are_same_var, has_condition_node_in_path, is_indirect_call_equal
+from static_analyze_util import data_check, are_same_var, has_condition_node_in_path, is_indirect_call_equal, \
+    get_var_operation_node
 
 
 class MemoryLeakAnalyzer:
@@ -10,6 +11,8 @@ class MemoryLeakAnalyzer:
         self.cpg = cpg
         self.allocations: Dict[str, Set[str]] = {}  # 变量到分配点的映射
         self.de_allocations: Dict[str, Set[str]] = {}  # 变量到释放点的映射
+        self.alloc_methods = ['malloc', 'calloc', 'realloc', 'new']
+        self.indirect_call_func = ''
 
     def analyze_potential_leak(self, matching_nodes: list, line: unidiff.patch.Line, file_type: str) -> Tuple[
         bool, str]:
@@ -17,14 +20,16 @@ class MemoryLeakAnalyzer:
         if file_type == 'source':
             # 获取删除数据中包含free的node，以及包含的变量名称，认为是潜在泄漏点
             node, var = self.get_free_node(matching_nodes)
+            # print(f"Test free node is {node}")
             if not var:
                 return False, "No var in matching nodes."
-            print(f"Node id is {node}, and var name is {var}")
+            # print(f"Test Node id is {node}, and var name is {var}")
 
             # 查找变量的所有分配点，包括malloc/new，注意，这里可能存在通过调用其他函数实现的间接分配
             allocation_nodes = self.find_all_allocations(var, node, file_type)
-            de_allocation_nodes = self.find_de_allocations(var, node)
-
+            # print(f"Test allocation nodes are {allocation_nodes}")
+            de_allocation_nodes = self.find_de_allocations(file_type, node)
+            # print(f"Test de_allocation nodes are {de_allocation_nodes}")
             # 1）如果被删除的var没有其他内存分配的位置，则需要进行告警，存在内存泄漏风险
             if not de_allocation_nodes:
                 # print(f"Can not find allocation nodes for var={var}")
@@ -54,15 +59,30 @@ class MemoryLeakAnalyzer:
                 # 3) 如果有释放位置，但是没有分配位置，则认为没有风险
                 return False, f"Removing line {line.source_line_no} has no memory leak risk."
         elif file_type == 'target':
-            # target对应添加场景，要分析malloc/calloc/realloc/new(c++)，还有一些间接内存创建
+            # target对应添加场景，要分析malloc/calloc/realloc/new(c++)，还有一些间接内存创建，以及变量操作（这是已经产生漏洞的情况）
             node, var = self.get_alloc_node(matching_nodes)
-            if not var:
+            node_op, var_op = get_var_operation_node(self.cpg, matching_nodes)
+            # print(f"Test, node_op and var_op are {node_op} {var_op}")
+            # 如果当前行没有涉及内存操作，但是有变量操作，则需要反向查找当前变量在前面是否有内存分配操作
+            if not var and node_op:
+                # 反向查找var_op的内存分配
+                node_op_alloc = self.find_alloc_by_var(node_op)
+                if node_op_alloc != '':
+                    # print(f"Test, node_op_alloc is {node_op_alloc}")
+                    node, var = self.get_var_name_node(node_op_alloc)
+            elif not var and not node_op:
                 return False, "No var in matching nodes."
             # print(f"Node id is {node}, and var name is {var}")
-
-            allocation_nodes = self.find_all_allocations(var, node, file_type)
-            de_allocation_nodes = self.find_de_allocations(var, node)
-
+            allocation_nodes = set()
+            de_allocation_nodes = set()
+            if node:
+                allocation_nodes = self.find_all_allocations(var, node, file_type)
+                de_allocation_nodes = self.find_de_allocations(file_type, node)
+            elif node_op:
+                # print(f"Test node op")
+                allocation_nodes = self.find_all_allocations(node_op, node_op, file_type)
+                de_allocation_nodes = self.find_de_allocations(file_type, node_op)
+            # print(f"Test de_allocation nodes are {de_allocation_nodes}")
             if not de_allocation_nodes:
                 res = (f"Adding line {line.target_line_no}: '{line.value.strip()}' has potential memory leak risk! "
                        f"Unable to find the corresponding memory deallocation operation for the variable in the file")
@@ -92,13 +112,16 @@ class MemoryLeakAnalyzer:
                 # TBD:改成data_check()
                 if (data['label'] == 'CALL'
                         and (data['METHOD_FULL_NAME'] == 'free'
-                             or data['METHOD_FULL_NAME'] == 'delete')):
+                             or data['METHOD_FULL_NAME'] == '<operator>.delete')):
                     var_name, node_id = self.get_var_name_node(node)
                     return node_id, var_name
             func_node = is_indirect_call_equal(self.cpg, 'release', matching_nodes)
             if func_node != '':
                 # 如果是间接操作，且函数的入参在函数内被释放
+                # print(f"Test indirect_call func_node is {func_node}")
+                self.indirect_call_func = self.cpg.nodes[func_node].get('METHOD_FULL_NAME', 'Unknown')
                 var_name, node_id = self.get_var_name_node(func_node)
+                # print(f"Test var name is {var_name}, node id is {node_id}")
         return node_id, var_name
 
     def get_alloc_node(self, matching_nodes: list) -> tuple[str, str]:
@@ -107,12 +130,11 @@ class MemoryLeakAnalyzer:
         if not matching_nodes:
             print("The matching node is NULL")
         else:
-            alloc_methods = ['malloc', 'calloc', 'realloc', 'new']
             for node, data in matching_nodes:
                 # 直接场景，找到malloc/calloc/realloc的函数调用
                 # TBD:改file_name
                 if (data['label'] == 'CALL'
-                        and ('CODE' in data) and (data_check(data['CODE'], alloc_methods)
+                        and ('CODE' in data) and (data_check(data['CODE'], self.alloc_methods)
                                                   and data['METHOD_FULL_NAME'] == '<operator>.assignment')):
                     var_name, var_id = self.get_var_name_node(node)
                     node_id = var_id
@@ -140,7 +162,7 @@ class MemoryLeakAnalyzer:
         # 当file_type为target时，则表示对新增的内存分配场景进行分析，而内存动态分配后只能通过realloc进行扩展
         # TBD：改成两个file
         if file_type == "source":
-            allocation_functions = ['malloc', 'calloc', 'realloc']
+            allocation_functions = ['malloc', 'calloc', 'realloc', 'new']
         elif file_type == "target":
             allocation_functions = ['realloc']
         # 注意：如果考虑通过外部函数调用间接分配内存场景，则会增加误报率，降低漏报率，需要根据实际场景选择
@@ -155,7 +177,7 @@ class MemoryLeakAnalyzer:
                                      and data['METHOD_FULL_NAME'] == '<operator>.assignment'):
                 # 进行数据流通路判断，检测是否为同一个内存地址
                 var_name, var_node = self.get_var_name_node(node)
-                if var_node is not None and var_node is not None and are_same_var(self.cpg, var_node, node_id):
+                if var_node is not None and var_name is not None and are_same_var(self.cpg, var_node, node_id):
                     # print(f"Test1: node {var_node} and node {node_id} ara same")
                     allocation_nodes.add(var_node)
             # 间接内存分配场景，调用其他函数封装内存分配函数对待分析变量进行赋值
@@ -164,28 +186,50 @@ class MemoryLeakAnalyzer:
                                        and data['METHOD_FULL_NAME'] == '<operator>.assignment'):
                 # 进行数据流通路判断，检测是否为同一个内存地址
                 var_name, var_node = self.get_var_name_node(node)
-                if var_node is not None and var_node is not None and are_same_var(self.cpg, var_node, node_id):
+                if var_node is not None and var_name is not None and are_same_var(self.cpg, var_node, node_id):
                     # print(f"Test2: node {var_node} and node {node_id} ara same")
                     allocation_nodes.add(var_node)
         return allocation_nodes
 
-    def find_de_allocations(self, var: str, node_id: str) -> Set[str]:
+    def var_in_indirect_call(self, var_id: str) -> bool:
+        if self.indirect_call_func not in ['', 'Unknown']:
+            # print("Test has indirect call\n")
+            method_start_line = -1
+            method_end_line = -1
+            var_line = int(self.cpg.nodes[var_id].get('LINE_NUMBER', '-1'))
+            for node, data in self.cpg.nodes(data=True):
+                if (data.get('label', 'Unknown') == 'METHOD'
+                        and data.get('FULL_NAME', 'Unknown') == self.indirect_call_func):
+                    method_start_line = int(data.get('LINE_NUMBER', '-1'))
+                    method_end_line = int(data.get('LINE_NUMBER_END', '-1'))
+                    break
+            if method_start_line < var_line < method_end_line:
+                return False
+            else:
+                return True
+        else:
+            return False
+
+    def find_de_allocations(self, type: str, node_id: str) -> Set[str]:
         de_allocation_nodes = set()
         de_allocation_functions = ['free', 'delete', 'kfree']
         # 找到释放内存操作的根节点（line）
+        # print(f'Test target node id is {node_id}')
         for node, data in self.cpg.nodes(data=True):
             # 直接内存释放场景，比较内存释放函数
             # TDB: 改成data_check
             if ('CODE' in data) and (data_check(data['CODE'], de_allocation_functions)
                                      and data['label'] == 'CALL'
-                                     and data['METHOD_FULL_NAME'] in de_allocation_functions):
+                                     and data_check(data['METHOD_FULL_NAME'], de_allocation_functions)):
                 # 需要去掉被删除的节点，然后再判断是否是同一个变量
                 # 计算被释放的变量节点
                 var_name, var_node = self.get_var_name_node(node)
-                if (var_node is not None and var_node is not None and
-                        not var_node == node_id and are_same_var(self.cpg, var_node, node_id)):
+                if var_node is not None and var_node is not None and are_same_var(self.cpg, var_node, node_id):
                     # print(f"Test3: node {var_node} and node {node_id} ara same")
-                    de_allocation_nodes.add(var_node)
+                    if type == 'target':
+                        de_allocation_nodes.add(var_node)
+                    elif type == 'source' and var_node != node_id and not self.var_in_indirect_call(var_node):
+                        de_allocation_nodes.add(var_node)
             # 降低漏报场景，不考虑间接释放
         return de_allocation_nodes
 
@@ -216,3 +260,30 @@ class MemoryLeakAnalyzer:
             if not has_path:
                 last_source_nodes.add(allocation_node)
         return last_source_nodes
+
+    def cpg_iteration_alloc(self, cpg: nx.MultiDiGraph, node: str, init_node: str, visited: set) -> str:
+        alloc_node = ''
+        successors = cpg.successors(node)
+        for suc in successors:
+            #print(f"Test, current suc is {suc}")
+            if suc in visited:
+                break
+            visited.add(suc)
+            label = cpg.nodes[suc].get('label', 'Unknown')
+            code = cpg.nodes[suc].get('CODE', 'Unknown')
+            method = cpg.nodes[suc].get('METHOD_FULL_NAME', 'Unknown')
+            if label == 'CALL' and (data_check(code, self.alloc_methods)) and method == '<operator>.assignment':
+                var_name, var_node = self.get_var_name_node(suc)
+                if var_node is not None and var_name is not None and are_same_var(self.cpg, var_node, init_node):
+                    alloc_node = var_node
+                    break
+            alloc_node = self.cpg_iteration_alloc(cpg, suc, init_node, visited)
+            if alloc_node != '':
+                break
+        return alloc_node
+
+    def find_alloc_by_var(self, node_op) -> str:
+        reverse_cpg = self.cpg.reverse(copy=True)
+        visited = set()
+        alloc_node = self.cpg_iteration_alloc(reverse_cpg, node_op, node_op, visited)
+        return alloc_node

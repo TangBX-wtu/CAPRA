@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 
 import graphviz
 import networkx as nx
@@ -9,7 +10,7 @@ from unidiff import PatchSet
 from memory_leak_analyzer import MemoryLeakAnalyzer
 from static_analyze_util import get_nodes_to_file, is_node_in_file
 from use_after_free_analyzer import UseAfterFreeAnalyzer
-
+from diff_directories import generate_diff_by_path
 
 def get_patch_info(file_path):
     with open(file_path, 'r') as patch_file:
@@ -73,22 +74,26 @@ def analyze_graph(lines, dot_file_path, file_type, file_name):
     if len(lines) < 0:
         return
     graph = read_dot(dot_file_path)
+    # print(f"Test dot_file_path is {dot_file_path}")
     # 创建缺陷解析器实例
     memory_leak_analyzer = MemoryLeakAnalyzer(graph)
     use_after_free_analyzer = UseAfterFreeAnalyzer(graph)
 
     # 获取node和filename之间的映射关系
     nodes_to_file = get_nodes_to_file(graph)
+    # print(f"Test file name is {file_name}")
+    # print(f"Test nodes_to_file is {nodes_to_file}")
     # 为了方便后续查询，创建一个line_num和nodes的映射，后续查询可以通过matching_nodes = nodes_line_num.get(target_line, [])
     nodes_line_num = {}
     for node, data in graph.nodes(data=True):
-        # is_node_in_file(nodes_to_file, node, file_name)
+        # print(is_node_in_file(nodes_to_file, node, file_name))
         if 'LINE_NUMBER' in data and is_node_in_file(nodes_to_file, node, file_name):
             line_num = int(data['LINE_NUMBER'])
             if line_num not in nodes_line_num:  # and filename == node file
                 nodes_line_num[line_num] = []
             nodes_line_num[line_num].append((node, data))
     # 针对修改逐行分析
+    # print(f"Test nodes line num size is {len(nodes_line_num)}")
     for line in lines:
         # 找到图中对应的节点集合，matching_nodes
         matching_nodes = list()
@@ -127,31 +132,47 @@ def dot_to_image(file_path, out_put_path, format='png'):
     print(f"Image saved as {out_put_path}.{format}")
 
 
+def data_preprocess(case_path: str, mk_new_diff: bool, mk_new_cpg: bool) -> str:
+    # data_path 是test_case的路径
+    patch_path = generate_diff_by_path(mk_new_diff, case_path)
+
+    if patch_path != '' and mk_new_cpg:
+        generate_cpg(case_path)
+
+    return patch_path
+
+
 if __name__ == '__main__':
-    # dot_file_path = "/home/tbx/workspace/GraphSPD/GraphSPD/ab_file/fcc66557503124ab98491a598b706a24eb3cf0e1/outAll/export.dot"
-    # analyze_dot_graph(dot_file_path)
-    # patch_path = "/home/tbx/PycharmProjects/StaticAnly/OpenSSH_test/patch-info/fcc6655"
-    patch_path_free_test = "/home/tbx/bin/joern/test-file/patch-info/fcc6655"
-    patch_path_malloc_test = "/home/tbx/bin/joern/test-file-malloc/patch-info/fcc6655"
-    patch_path_uaf_add_free = "/home/tbx/bin/joern/test-UAF-add-free/patch-info/fcc6655"
-    patch_path_uaf_add_free_and_null = "/home/tbx/bin/joern/test-UAF-add-free-and-null/patch-info/fcc6655"
-    patch_path_uaf_add_use = "/home/tbx/bin/joern/test-UAF-add-use/patch-info/fcc6655"
-    patch_path_uaf_remove_null = "/home/tbx/bin/joern/test-UAF-remove-NULL/patch-info/fcc6655"
-    patch_path_uaf_indirect_call = "/home/tbx/bin/joern/test-UAF-indirect-call/patch-info/fcc6655"
-    patch_info = get_patch_info(patch_path_uaf_indirect_call)
+
+    # 对测试用例的数据进行预处理，输入为测试用例目录，创建diff文件，生成patch文件和cpg文件
+    test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/MemoryLeak/bad/Addition/testcase_05"
+    patch_path = data_preprocess(test_case_path, False, False)
+    # print(f"{patch_path}")
+    if patch_path == '':
+        print(f"data preprocess fail, can not generate new patch...")
+        sys.exit(0)
+
+    # patch_path_free_test = "/home/tbx/bin/joern/test-file/patch-info/fcc6655"
+    # patch_path_malloc_test = "/home/tbx/bin/joern/test-file-malloc/patch-info/fcc6655"
+    # patch_path_uaf_add_free = "/home/tbx/bin/joern/test-UAF-add-free/patch-info/fcc6655"
+    # patch_path_uaf_add_free_and_null = "/home/tbx/bin/joern/test-UAF-add-free-and-null/patch-info/fcc6655"
+    # patch_path_uaf_add_use = "/home/tbx/bin/joern/test-UAF-add-use/patch-info/fcc6655"
+    # patch_path_uaf_remove_null = "/home/tbx/bin/joern/test-UAF-remove-NULL/patch-info/fcc6655"
+    # patch_path_uaf_indirect_call = "/home/tbx/bin/joern/test-UAF-indirect-call/patch-info/fcc6655"
+    patch_info = get_patch_info(patch_path)
 
     # 生成a/b目录下的cpg文件（dot格式）
-    #code_path = "/home/tbx/PycharmProjects/StaticAnly/OpenSSH_test"
+    # code_path = "/home/tbx/PycharmProjects/StaticAnly/OpenSSH_test"
     # code_path = "/home/tbx/bin/joern/test-file"
     # code_path = "/home/tbx/bin/joern/test-file-malloc"
     # code_path = "/home/tbx/bin/joern/test-UAF-add-free"
     # code_path = "/home/tbx/bin/joern/test-UAF-add-free-and-null"
     # code_path = "/home/tbx/bin/joern/test-UAF-add-use"
     # code_path = "/home/tbx/bin/joern/test-UAF-remove-NULL"
-    code_path = "/home/tbx/bin/joern/test-UAF-indirect-call"
+    # test_case_path = "/home/tbx/bin/joern/test-UAF-indirect-call"
     # generate_cpg(code_path)
-    source_cpg_path = code_path + "/a/outA/export.dot"
-    target_cpg_path = code_path + "/b/outB/export.dot"
+    source_cpg_path = test_case_path + "/a/outA/export.dot"
+    target_cpg_path = test_case_path + "/b/outB/export.dot"
 
     # 查看图中路径，注意非常耗时
     # dot_to_image(target_cpg_path, code_path+'/b/cpg_img', 'png')

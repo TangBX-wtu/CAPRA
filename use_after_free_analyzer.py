@@ -2,7 +2,7 @@ import networkx as nx
 import unidiff
 from typing import Tuple, Set
 from static_analyze_util import data_check, are_same_var, is_condition_structure, has_condition_node_in_path, \
-    is_indirect_call_equal
+    is_indirect_call_equal, get_var_name_node, is_memory_operation, get_var_operation_node
 
 
 class UseAfterFreeAnalyzer:
@@ -40,7 +40,7 @@ class UseAfterFreeAnalyzer:
                     res, res_str = self.result_format(res_no, file_type, line, var)
                     return res, res_str
             # 如果是变量内存操作节点，则分析该变量是否在之前被free
-            node, var = self.get_var_operation_node(matching_nodes)
+            node, var = get_var_operation_node(self.cpg, matching_nodes)
             # print(f"Test use var name is {var}")
             # 反向遍历变量是否被free过：找到全局对应上述变量的free，看看是否有通路
             # 如果找到free的节点，则计算他们的通路，并在通路之间查看是否有赋值为NULL的节点 G.reverse()
@@ -56,7 +56,7 @@ class UseAfterFreeAnalyzer:
                         res, res_str = self.result_format(res_no, file_type, line, var)
                         return res, res_str
                 else:
-                    print("Cannot find memory free nodes in this CPG")
+                    print("UAF detection: Cannot find memory free nodes in this CPG")
         else:
             # print("UAF Test source")
             # 1.检查删除line中是否是清理赋值NULL
@@ -87,7 +87,7 @@ class UseAfterFreeAnalyzer:
         node = ''
         var = ''
         for node_id, data in matching_nodes:
-            var_name, var_node = self.get_var_name_node(node_id)
+            var_name, var_node = get_var_name_node(self.cpg, node_id)
             if var_node is not None and var_name is not None and self.is_assign_null(node_id, var_node):
                 node = var_node
                 var = var_name
@@ -165,16 +165,6 @@ class UseAfterFreeAnalyzer:
                 result_bool = False
         return result_bool, result_str
 
-    def get_var_operation_node(self, matching_nodes: list):
-        node_id = ''
-        var_name = ''
-        for node, data in matching_nodes:
-            if self.is_memory_operation(node):
-                var_name, node_id = self.get_var_name_node(node)
-                if var_name is not None and node_id is not None:
-                    return node_id, var_name
-        return node_id, var_name
-
     def check_use_after_free_by_path(self, uses: list, var_node: str) -> int:
         has_uaf = self.SAFE
         has_assign_null = False
@@ -189,7 +179,7 @@ class UseAfterFreeAnalyzer:
                 # 注意：这里增加误报率来应对Hypocrite攻击，如果赋值语句之前存在条件判断节点，则这里的赋值NULL可能无法到达
                 if (not has_assign_null) and (not has_condition_node):
                     has_assign_null = True
-            elif self.is_memory_operation(use):
+            elif is_memory_operation(self.cpg, use):
                 if has_assign_null:
                     has_uaf = self.NULL_POINT_VUL
                     return has_uaf
@@ -224,7 +214,7 @@ class UseAfterFreeAnalyzer:
 
     def find_de_allocations(self, var: str, node_id: str) -> Set[str]:
         de_allocation_nodes = set()
-        de_allocation_functions = ['free', 'delete', 'kfree']
+        de_allocation_functions = ['free', '<operator>.delete', 'kfree']
         # 找到释放内存操作的根节点（line）
         for node, data in self.cpg.nodes(data=True):
             # 直接内存释放场景，比较内存释放函数
@@ -233,40 +223,13 @@ class UseAfterFreeAnalyzer:
                                      and data['METHOD_FULL_NAME'] in de_allocation_functions):
                 # print(f"Test Code of current data is {data}")
                 # 计算被释放的变量节点
-                var_name, var_node = self.get_var_name_node(node)
+                var_name, var_node = get_var_name_node(self.cpg, node)
                 if (var_node is not None and var_node is not None and
                         not var_node == node_id and are_same_var(self.cpg, var_node, node_id)):
                     # print(f"Test3: node {var_node} and node {node_id} ara same")
                     de_allocation_nodes.add(var_node)
             # 降低漏报场景，不考虑间接释放
         return de_allocation_nodes
-
-    def is_memory_operation(self, node_id: str) -> bool:
-        node_type = self.cpg.nodes[node_id].get('label', 'Unknown')
-        node_name = self.cpg.nodes[node_id].get('NAME', 'Unknown')
-        node_code = self.cpg.nodes[node_id].get('CODE', 'Unknown')
-        if node_type in ['CALL', 'IDENTIFIER']:
-            # 检查是否是内存操作函数（不考虑内存的重新分配）
-            if node_type == 'CALL':
-                # TBD：改成data_check()
-                memory_funcs = ['memcpy', 'memmove', '<operator>.pointerCall']
-                if node_name in memory_funcs:
-                    return True
-            # 判读是否是指针操作
-            if '*' in node_code or '->' in node_code:
-                return True
-            # 判断是否是地址操作
-            if '&' in node_code:
-                return True
-            # 判断是否是数组操作
-            if '[' in node_code and ']' in node_code:
-                return True
-        # 判断相邻节点是否有内存相关操作
-        for neighbor in self.cpg.neighbors(node_id):
-            if (self.cpg.nodes[neighbor].get('label', 'Unknown') == 'MEMBER'
-                    and self.cpg.nodes[neighbor].get('TYPE_FULL_NAME', 'Unknown').endswith('*')):
-                return True
-        return False
 
     def get_free_node(self, matching_nodes: list):
         node_id = ''
@@ -280,12 +243,12 @@ class UseAfterFreeAnalyzer:
                 # TBD:改成data_check
                 if data['label'] == 'CALL' and data['METHOD_FULL_NAME'] in ['free', 'kfree']:
                     # matching nodes是针对某一行的，所以不会出现多个free操作
-                    var_name, node_id = self.get_var_name_node(node)
+                    var_name, node_id = get_var_name_node(self.cpg, node)
                     return node_id, var_name
             func_node = is_indirect_call_equal(self.cpg, 'release', matching_nodes)
             if func_node != '':
                 # 如果是间接操作，且函数的入参在函数内被释放
-                var_name, node_id = self.get_var_name_node(func_node)
+                var_name, node_id = get_var_name_node(self.cpg, func_node)
         return node_id, var_name
 
     # 遍历变量的使用路径
@@ -298,22 +261,8 @@ class UseAfterFreeAnalyzer:
                 uses.append(succ)
             elif node_type == 'CALL':
                 # 判断是否是当前node的argument
-                var_name, current_node = self.get_var_name_node(succ)
+                var_name, current_node = get_var_name_node(self.cpg, succ)
                 # print(f'Test 5: node_id is {node_id}, current_node is {current_node}')
                 if current_node not in [None, ''] and are_same_var(self.cpg, node_id, current_node):
                     uses.append(succ)
         return uses
-
-    def get_var_name_node(self, node_id):
-        node = self.cpg.nodes[node_id]
-        if node['label'] == 'CALL':
-            # 默认认为第一个参数是被操作的变量
-            for n in self.cpg.successors(node_id):
-                edges = self.cpg.get_edge_data(node_id, n)
-                for edge_data in edges.values():
-                    if edge_data['label'] == 'ARGUMENT':
-                        data = self.cpg.nodes[n]
-                        if data['label'] == 'IDENTIFIER':
-                            var = data['NAME']
-                            return var, n
-        return None, None
