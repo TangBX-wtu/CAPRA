@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 import unidiff  # 用于验证生成的patch文件
 
@@ -66,6 +67,7 @@ def generate_diff_by_path(mk_new_diff: bool, input_path: str) -> str:
     if mk_new_diff is not True:
         return patch_file
 
+    start_time = time.time()
     dir_a = input_path + '/a'
     dir_b = input_path + '/b'
 
@@ -75,6 +77,8 @@ def generate_diff_by_path(mk_new_diff: bool, input_path: str) -> str:
 
     success = generate_diff(dir_a, dir_b, patch_file)
     if success:
+        end_time = time.time()
+        print(f'Time to create new patch: {(end_time - start_time) * 1000:.3f} ms')
         return patch_file
     else:
         return ''

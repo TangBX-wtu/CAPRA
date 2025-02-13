@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<memory_functions>
+    <allocation>
+        <function>malloc</function>
+        <function>calloc</function>
+        <function>realloc</function>
+        <function>new</function>
+        <function>kzalloc</function>
+    </allocation>
+    <deallocation>
+        <function>free</function>
+        <function>&lt;operator&gt;.delete</function>
+        <function>kfree</function>
+        <function>put_device</function>
+    </deallocation>
+    <memory>
+        <operation>memcpy</operation>
+        <operation>memmove</operation>
+        <operation>&lt;operator&gt;.pointerCall</operation>
+        <operation>free</operation>
+        <operation>kfree</operation>
+        <operation>strcpy</operation>
+        <operation>printf</operation>
+        <operation>print</operation>
+        <operation>&lt;operator&gt;.indirection</operation>
+        <operation>&lt;operator&gt;.postIncrement</operation>
+        <operation>&lt;operator&gt;.indirectIndexAccess</operation>
+    </memory>
+</memory_functions>

@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import time
 
 import graphviz
 import networkx as nx
@@ -81,8 +82,6 @@ def analyze_graph(lines, dot_file_path, file_type, file_name):
 
     # 获取node和filename之间的映射关系
     nodes_to_file = get_nodes_to_file(graph)
-    # print(f"Test file name is {file_name}")
-    # print(f"Test nodes_to_file is {nodes_to_file}")
     # 为了方便后续查询，创建一个line_num和nodes的映射，后续查询可以通过matching_nodes = nodes_line_num.get(target_line, [])
     nodes_line_num = {}
     for node, data in graph.nodes(data=True):
@@ -110,12 +109,18 @@ def analyze_graph(lines, dot_file_path, file_type, file_name):
             # print(f"Test: the node contained line num {line.target_line_no} are {matching_nodes}")
             # 可能存在同时删除 内存分配和内存释放 的情况，我们并不做过滤，这种简单的判断留给committer
             # 1.检测内存泄漏风险
+            ml_start_time = time.time()
             risk, res_str = memory_leak_analyzer.analyze_potential_leak(matching_nodes, line, file_type)
+            ml_end_time = time.time()
+            print(f'Memory leak analysis for a single line takes time: {(ml_end_time - ml_start_time) * 1000:.3f} ms')
             # print(f"Test res_str of memory leak analyze is {res_str}")
             if risk:
                 risk_set.add(res_str)
             # 2.检测UAF风险
+            uaf_start_time = time.time()
             risk, res_str = use_after_free_analyzer.analyze_potential_uaf(matching_nodes, line, file_type)
+            uaf_end_time = time.time()
+            print(f'UAF analysis for a single line takes time: {(uaf_end_time - uaf_start_time) * 1000:.3f} ms')
             # print(f"Test res_str of use after free analyze is {res_str}")
             if risk:
                 risk_set.add(res_str)
@@ -137,7 +142,10 @@ def data_preprocess(case_path: str, mk_new_diff: bool, mk_new_cpg: bool) -> str:
     patch_path = generate_diff_by_path(mk_new_diff, case_path)
 
     if patch_path != '' and mk_new_cpg:
+        start_time = time.time()
         generate_cpg(case_path)
+        end_time = time.time()
+        print(f'Time to create CPG: {(end_time - start_time) * 1000:.3f} ms')
 
     return patch_path
 
@@ -145,32 +153,16 @@ def data_preprocess(case_path: str, mk_new_diff: bool, mk_new_cpg: bool) -> str:
 if __name__ == '__main__':
 
     # 对测试用例的数据进行预处理，输入为测试用例目录，创建diff文件，生成patch文件和cpg文件
-    test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/MemoryLeak/bad/Addition/testcase_05"
+    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF/bad/Removement/testcase_01"
+    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/Hypocrite-Commit/case_2"
+    test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/CVE-2019012819"
     patch_path = data_preprocess(test_case_path, False, False)
-    # print(f"{patch_path}")
     if patch_path == '':
         print(f"data preprocess fail, can not generate new patch...")
         sys.exit(0)
 
-    # patch_path_free_test = "/home/tbx/bin/joern/test-file/patch-info/fcc6655"
-    # patch_path_malloc_test = "/home/tbx/bin/joern/test-file-malloc/patch-info/fcc6655"
-    # patch_path_uaf_add_free = "/home/tbx/bin/joern/test-UAF-add-free/patch-info/fcc6655"
-    # patch_path_uaf_add_free_and_null = "/home/tbx/bin/joern/test-UAF-add-free-and-null/patch-info/fcc6655"
-    # patch_path_uaf_add_use = "/home/tbx/bin/joern/test-UAF-add-use/patch-info/fcc6655"
-    # patch_path_uaf_remove_null = "/home/tbx/bin/joern/test-UAF-remove-NULL/patch-info/fcc6655"
-    # patch_path_uaf_indirect_call = "/home/tbx/bin/joern/test-UAF-indirect-call/patch-info/fcc6655"
     patch_info = get_patch_info(patch_path)
 
-    # 生成a/b目录下的cpg文件（dot格式）
-    # code_path = "/home/tbx/PycharmProjects/StaticAnly/OpenSSH_test"
-    # code_path = "/home/tbx/bin/joern/test-file"
-    # code_path = "/home/tbx/bin/joern/test-file-malloc"
-    # code_path = "/home/tbx/bin/joern/test-UAF-add-free"
-    # code_path = "/home/tbx/bin/joern/test-UAF-add-free-and-null"
-    # code_path = "/home/tbx/bin/joern/test-UAF-add-use"
-    # code_path = "/home/tbx/bin/joern/test-UAF-remove-NULL"
-    # test_case_path = "/home/tbx/bin/joern/test-UAF-indirect-call"
-    # generate_cpg(code_path)
     source_cpg_path = test_case_path + "/a/outA/export.dot"
     target_cpg_path = test_case_path + "/b/outB/export.dot"
 
@@ -180,25 +172,31 @@ if __name__ == '__main__':
     # 解析patch文件，找到删除的行和添加的行信息
     added_line_info, removed_line_info = get_added_removed_line(patch_info)
 
+    # 如果是added_line，则对target文件（b文件），如果是removed_line则对source文件进行分析
     if bool(added_line_info):
         # 针对增加场景，分析提交后的版本
+        start_time = time.time()
         for file_name, added_lines in added_line_info.items():
             risk_set = analyze_graph(added_lines, target_cpg_path, "target", file_name)
             if risk_set:
-                print("The potential risk by the added lines in this commit are: ")
+                print("The potential risks by the added lines in this commit are: ")
                 for risk in risk_set:
                     print(f"#### {risk} ####")
             else:
                 print("#### Adding in this commit is safe ####")
+        end_time = time.time()
+        print(f'Patch defect analysis takes time: {(end_time - start_time) * 1000:.3f} ms')
     if bool(removed_line_info):
         # 针对删除行场景，我们分析提交前的版本
+        start_time = time.time()
         for file_name, removed_lines in removed_line_info.items():
             risk_set = analyze_graph(removed_lines, source_cpg_path, "source", file_name)
             # 后面可以考虑生成文本文件，然后输出到对应patch的目录下
             if risk_set:
-                print("The potential risk by the removed lines in this commit are: ")
+                print("The potential risks by the removed lines in this commit are: ")
                 for risk in risk_set:
                     print(f"#### {risk} ####")
             else:
                 print("#### Removing in this commit is safe ####")
-    # 如果是added_line，则对target文件（b文件），如果是removed_line则对source文件进行分析
+        end_time = time.time()
+        print(f'Patch defect analysis takes time: {(end_time - start_time) * 1000:.3f} ms')

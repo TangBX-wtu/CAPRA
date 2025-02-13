@@ -3,7 +3,7 @@ import unidiff
 from typing import Dict, Set, Tuple
 
 from static_analyze_util import data_check, are_same_var, has_condition_node_in_path, is_indirect_call_equal, \
-    get_var_operation_node
+    get_var_operation_node, memory_func_init
 
 
 class MemoryLeakAnalyzer:
@@ -11,8 +11,9 @@ class MemoryLeakAnalyzer:
         self.cpg = cpg
         self.allocations: Dict[str, Set[str]] = {}  # 变量到分配点的映射
         self.de_allocations: Dict[str, Set[str]] = {}  # 变量到释放点的映射
-        self.alloc_methods = ['malloc', 'calloc', 'realloc', 'new']
         self.indirect_call_func = ''
+        self.allocation_funcs, self.deallocation_funcs, self.memory_operation = memory_func_init('func_file/memory_functions.xml')
+
 
     def analyze_potential_leak(self, matching_nodes: list, line: unidiff.patch.Line, file_type: str) -> Tuple[
         bool, str]:
@@ -61,7 +62,7 @@ class MemoryLeakAnalyzer:
         elif file_type == 'target':
             # target对应添加场景，要分析malloc/calloc/realloc/new(c++)，还有一些间接内存创建，以及变量操作（这是已经产生漏洞的情况）
             node, var = self.get_alloc_node(matching_nodes)
-            node_op, var_op = get_var_operation_node(self.cpg, matching_nodes)
+            node_op, var_op = get_var_operation_node(self.cpg, matching_nodes, self.memory_operation)
             # print(f"Test, node_op and var_op are {node_op} {var_op}")
             # 如果当前行没有涉及内存操作，但是有变量操作，则需要反向查找当前变量在前面是否有内存分配操作
             if not var and node_op:
@@ -70,7 +71,7 @@ class MemoryLeakAnalyzer:
                 if node_op_alloc != '':
                     # print(f"Test, node_op_alloc is {node_op_alloc}")
                     node, var = self.get_var_name_node(node_op_alloc)
-            elif not var and not node_op:
+            elif var != '' and node_op != '':
                 return False, "No var in matching nodes."
             # print(f"Node id is {node}, and var name is {var}")
             allocation_nodes = set()
@@ -111,8 +112,7 @@ class MemoryLeakAnalyzer:
                 # 直接场景，找到free/delete的函数调用
                 # TBD:改成data_check()
                 if (data['label'] == 'CALL'
-                        and (data['METHOD_FULL_NAME'] == 'free'
-                             or data['METHOD_FULL_NAME'] == '<operator>.delete')):
+                        and data_check(data['METHOD_FULL_NAME'], self.deallocation_funcs)):
                     var_name, node_id = self.get_var_name_node(node)
                     return node_id, var_name
             func_node = is_indirect_call_equal(self.cpg, 'release', matching_nodes)
@@ -134,7 +134,7 @@ class MemoryLeakAnalyzer:
                 # 直接场景，找到malloc/calloc/realloc的函数调用
                 # TBD:改file_name
                 if (data['label'] == 'CALL'
-                        and ('CODE' in data) and (data_check(data['CODE'], self.alloc_methods)
+                        and ('CODE' in data) and (data_check(data['CODE'], self.allocation_funcs)
                                                   and data['METHOD_FULL_NAME'] == '<operator>.assignment')):
                     var_name, var_id = self.get_var_name_node(node)
                     node_id = var_id
@@ -153,7 +153,7 @@ class MemoryLeakAnalyzer:
                         if data['label'] == 'IDENTIFIER':
                             var = data['NAME']
                             return var, n
-        return None, None
+        return '', ''
 
     # 找到图中所有内存分配的位置和潜在位置
     def find_all_allocations(self, var: str, node_id: str, file_type: str) -> Set[str]:
@@ -162,7 +162,7 @@ class MemoryLeakAnalyzer:
         # 当file_type为target时，则表示对新增的内存分配场景进行分析，而内存动态分配后只能通过realloc进行扩展
         # TBD：改成两个file
         if file_type == "source":
-            allocation_functions = ['malloc', 'calloc', 'realloc', 'new']
+            allocation_functions = self.allocation_funcs
         elif file_type == "target":
             allocation_functions = ['realloc']
         # 注意：如果考虑通过外部函数调用间接分配内存场景，则会增加误报率，降低漏报率，需要根据实际场景选择
@@ -212,19 +212,19 @@ class MemoryLeakAnalyzer:
 
     def find_de_allocations(self, type: str, node_id: str) -> Set[str]:
         de_allocation_nodes = set()
-        de_allocation_functions = ['free', 'delete', 'kfree']
+        # de_allocation_functions = ['free', 'delete', 'kfree']
         # 找到释放内存操作的根节点（line）
         # print(f'Test target node id is {node_id}')
         for node, data in self.cpg.nodes(data=True):
             # 直接内存释放场景，比较内存释放函数
             # TDB: 改成data_check
-            if ('CODE' in data) and (data_check(data['CODE'], de_allocation_functions)
+            if ('CODE' in data) and (data_check(data['CODE'], self.deallocation_funcs)
                                      and data['label'] == 'CALL'
-                                     and data_check(data['METHOD_FULL_NAME'], de_allocation_functions)):
+                                     and data_check(data['METHOD_FULL_NAME'], self.deallocation_funcs)):
                 # 需要去掉被删除的节点，然后再判断是否是同一个变量
                 # 计算被释放的变量节点
                 var_name, var_node = self.get_var_name_node(node)
-                if var_node is not None and var_node is not None and are_same_var(self.cpg, var_node, node_id):
+                if var_node != '' and var_node != '' and are_same_var(self.cpg, var_node, node_id):
                     # print(f"Test3: node {var_node} and node {node_id} ara same")
                     if type == 'target':
                         de_allocation_nodes.add(var_node)
@@ -272,9 +272,9 @@ class MemoryLeakAnalyzer:
             label = cpg.nodes[suc].get('label', 'Unknown')
             code = cpg.nodes[suc].get('CODE', 'Unknown')
             method = cpg.nodes[suc].get('METHOD_FULL_NAME', 'Unknown')
-            if label == 'CALL' and (data_check(code, self.alloc_methods)) and method == '<operator>.assignment':
+            if label == 'CALL' and (data_check(code, self.allocation_funcs)) and method == '<operator>.assignment':
                 var_name, var_node = self.get_var_name_node(suc)
-                if var_node is not None and var_name is not None and are_same_var(self.cpg, var_node, init_node):
+                if var_node != '' and var_name != '' and are_same_var(self.cpg, var_node, init_node):
                     alloc_node = var_node
                     break
             alloc_node = self.cpg_iteration_alloc(cpg, suc, init_node, visited)

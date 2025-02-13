@@ -1,10 +1,11 @@
 import networkx as nx
-from typing import Set
+import xml.etree.ElementTree as ET
+from typing import Set, Tuple
 
 
-# 包含关系检查（待修改，target_set改成file_name，load一个xml文件，xml文件中放各种函数名）
-def data_check(code: str, target_set) -> bool:
-    for data in target_set:
+# 包含关系检查
+def data_check(code: str, target_list) -> bool:
+    for data in target_list:
         if data in code:
             return True
     return False
@@ -41,6 +42,11 @@ def track_aliases(cpg: nx.MultiDiGraph, start_node: str, visited=None) -> Set[st
             edges = cpg.get_edge_data(start_node, neighbor)
             for edge_data in edges.values():
                 if edge_data['label'] in ['ALIAS', 'REACHING_DEF', 'CALL', 'REF', 'ARGUMENT', 'RETURN']:
+                    # neighbor不能是globle类型的函数调用
+                    if (cpg.nodes[neighbor].get('label', 'Unknown') == 'METHOD'
+                            and cpg.nodes[neighbor].get('AST_PARENT_TYPE', 'Unknown') == 'NAMESPACE_BLOCK'
+                            and cpg.nodes[neighbor].get('AST_PARENT_FULL_NAME', 'Unknown') == '<global>'):
+                        continue
                     aliases.update(track_aliases(cpg, neighbor, visited))
     return aliases
 
@@ -48,7 +54,7 @@ def track_aliases(cpg: nx.MultiDiGraph, start_node: str, visited=None) -> Set[st
 def find_local_var(cpg: nx.MultiDiGraph, current_node_id: str) -> str:
     local_node = ''
     if current_node_id in [None, '']:
-        print('[find_local_var]: Invalid node info')
+        # print('[find_local_var]: Invalid node info')
         return local_node
     for neighbor in cpg.neighbors(current_node_id):
         edges = cpg.get_edge_data(current_node_id, neighbor)
@@ -67,7 +73,7 @@ def find_local_var(cpg: nx.MultiDiGraph, current_node_id: str) -> str:
 def find_member_var(cpg: nx.MultiDiGraph, current_node_id: str) -> str:
     member_node = ''
     if current_node_id in [None, '']:
-        print('[find_member_var]: Invalid node info')
+        # print('[find_member_var]: Invalid node info')
         return member_node
     for neighbor in cpg.neighbors(current_node_id):
         edges = cpg.get_edge_data(current_node_id, neighbor)
@@ -113,7 +119,7 @@ def has_path_of_type(cpg: nx.MultiDiGraph, source_node_id: str, target_node_id: 
 # 间接函数调用场景中，判断函数内被操作变量是否与函数入参等价
 def are_argument_alias(cpg: nx.MultiDiGraph, source_node_id: str, argument_node_id: str) -> bool:
     if source_node_id in [None, ''] or argument_node_id in [None, '']:
-        print('[are_argument_alias]: Invalid node info')
+        # print('[are_argument_alias]: Invalid node info')
         return False
     source_var_refs = []
     argument_var_refs = []
@@ -155,11 +161,12 @@ def are_same_var(cpg: nx.MultiDiGraph, source_node_id: str, target_node_id: str)
         return True
     # 如果不是同一个变量，则判断是否是别名
     source_aliases = track_aliases(cpg, source_node_id)
-    # print(f"The aliases of source node {source_node_id} are {source_aliases}")
+    # print(f"Test, the aliases of source node {source_node_id} are {source_aliases}")
     target_aliases = track_aliases(cpg, target_node_id)
-    # print(f"The aliases of target node {target_node_id} are {target_aliases}")
+    # print(f"Test, the aliases of target node {target_node_id} are {target_aliases}")
     intersection = source_aliases.intersection(target_aliases)
     intersection.discard(None)
+    # print(f"Test intersection is {intersection}")
     # print(f'Test {nx.has_path(cpg, source_node_id, target_node_id)}')
     return bool(intersection)
 
@@ -226,6 +233,7 @@ def is_node_in_file(nodes_to_file: dict, node_id: str, file_name: str) -> bool:
 
 def get_var_name_node(cpg: nx.MultiDiGraph, node_id: str):
     node = cpg.nodes[node_id]
+    # print(f'Test, get_var_name_node node is {node}')
     if node['label'] == 'CALL':
         # 默认认为第一个参数是被操作的变量
         for n in cpg.successors(node_id):
@@ -236,7 +244,9 @@ def get_var_name_node(cpg: nx.MultiDiGraph, node_id: str):
                     if data['label'] == 'IDENTIFIER':
                         var = data['NAME']
                         return var, n
-    return None, None
+                    elif data['label'] == 'CALL':
+                        return get_var_name_node(cpg, n)
+    return '', ''
 
 
 def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes: list) -> str:
@@ -270,10 +280,10 @@ def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes:
                             # print(f"Test {cpg.nodes[current]}")
                             # TBD：改成data_check()
                             if (cpg.nodes[current].get('label', 'Unknown') == 'CALL'
-                                    and cpg.nodes[current].get('METHOD_FULL_NAME', 'Unknown') in ['free', 'kfree']):
+                                    and cpg.nodes[current].get('METHOD_FULL_NAME', 'Unknown') in ['free', 'kfree', 'put_device']):
                                 var_name, var_id = get_var_name_node(cpg, current)
                                 # print(str(are_same_var(cpg, var_id, str(20))))
-                                if var_id is not None and are_same_var(cpg, var_id, str(int(node) + 1)):
+                                if var_id != '' and are_same_var(cpg, var_id, str(int(node) + 1)):
                                     print(f'Find indirect call {func_name}')
                                     is_equal = True
                                     break
@@ -290,16 +300,19 @@ def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes:
         return ''
 
 
-def is_memory_operation(cpg: nx.MultiDiGraph, node_id: str) -> bool:
+def is_memory_operation(cpg: nx.MultiDiGraph, node_id: str, memory_operation: list) -> bool:
     node_type = cpg.nodes[node_id].get('label', 'Unknown')
     node_name = cpg.nodes[node_id].get('NAME', 'Unknown')
     node_code = cpg.nodes[node_id].get('CODE', 'Unknown')
     if node_type in ['CALL', 'IDENTIFIER']:
         # 检查是否是内存操作函数（不考虑内存的重新分配）
         if node_type == 'CALL':
-            # TBD：改成data_check()
-            memory_funcs = ['memcpy', 'memmove', '<operator>.pointerCall']
-            if node_name in memory_funcs:
+            # 直接内存操作函数
+            if node_name in memory_operation:
+                return True
+            # 间接函数操作中包含了入参，这里产生误报的概率很高，但是可以作为一种提示
+            next_node_type = cpg.nodes[str(int(node_id) + 1)].get('label', 'Unknown')
+            if next_node_type == 'IDENTIFIER':
                 return True
         # 判读是否是指针操作
         if '*' in node_code or '->' in node_code:
@@ -310,20 +323,54 @@ def is_memory_operation(cpg: nx.MultiDiGraph, node_id: str) -> bool:
         # 判断是否是数组操作
         if '[' in node_code and ']' in node_code:
             return True
+        # 调用函数是否为内存相关操作
+        post_node = str(int(node_id) - 1)
+        if (cpg.has_node(post_node) and cpg.nodes[post_node].get('label', 'Unknown') == 'CALL'
+                and cpg.nodes[post_node].get('NAME', 'Unknown') in memory_operation):
+            return True
     # 判断相邻节点是否有内存相关操作
     for neighbor in cpg.neighbors(node_id):
         if (cpg.nodes[neighbor].get('label', 'Unknown') == 'MEMBER'
                 and cpg.nodes[neighbor].get('TYPE_FULL_NAME', 'Unknown').endswith('*')):
+            # print("Test 6")
             return True
     return False
 
 
-def get_var_operation_node(cpg: nx.MultiDiGraph, matching_nodes: list):
+def get_var_operation_node(cpg: nx.MultiDiGraph, matching_nodes: list, memory_operation: list):
     node_id = ''
     var_name = ''
     for node, data in matching_nodes:
-        if is_memory_operation(cpg, node):
+        if is_memory_operation(cpg, node, memory_operation):
             var_name, node_id = get_var_name_node(cpg, node)
-            if var_name is not None and node_id is not None:
+            if var_name != '' and node_id != '':
                 return node_id, var_name
     return node_id, var_name
+
+
+def memory_func_init(xml_path: str) -> Tuple[list, list, list]:
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+
+        # 获取所有内存分配函数名
+        allocation_funcs = []
+        for alloc in root.findall(".//allocation/function"):
+            allocation_funcs.append(alloc.text.strip())
+
+        # 获取所有内存释放函数名
+        deallocation_funcs = []
+        for dealloc in root.findall(".//deallocation/function"):
+            deallocation_funcs.append(dealloc.text.strip())
+
+        # 获取内存操作相关函数名
+        memory_operations = []
+        for oper in root.findall(".//memory/operation"):
+            memory_operations.append(oper.text.strip())
+
+        return allocation_funcs, deallocation_funcs, memory_operations
+
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Can not find xml file: {xml_path}")
+    except ET.ParseError:
+        raise ET.ParseError(f"File error: {xml_path}")
