@@ -3,5 +3,5 @@
  Operating environment and main dependencies: 
  1) Python 3.10
  2) Ubuntu 22.04.4
- 3) Joern 2.0.4,
+ 3) Joern 2.0.4
  4) NetworkX 3.3
