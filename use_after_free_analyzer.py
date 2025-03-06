@@ -29,7 +29,7 @@ class UseAfterFreeAnalyzer:
             node, var = self.get_free_node(matching_nodes)
             # 如果是free节点，则分析变量的后续使用情况
             if var != '' and node != '':
-                # print(f'Test currnt node is {node}')
+                print(f'Test currnt node is {node}')
                 # 在cpg中查找变量var是否还在继续使用
                 uses = self.get_all_use_path(node, var, self.light_cpg)
                 uses = self.uses_path_clear(matching_nodes, uses)
@@ -130,8 +130,8 @@ class UseAfterFreeAnalyzer:
                                     de_allocation: str, target_node: str) -> int:
         # 找到的free节点已经计算过操作的变量是同一个变量或别名，所以如果发现存在path则就有可能存在uaf风险
         # reverse_cpg = cpg.reverse(copy=True)
-        # 通过代码属性图来判断内存释放操作与制定变量存在关系
-        if nx.has_path(cpg, de_allocation, target_node):
+        # 通过代码属性图来判断内存释放操作与制定变量存在关系(de_alloc->target_node是顺序操作，target_node->de_alloc是间接返回)
+        if nx.has_path(cpg, de_allocation, target_node) or nx.has_path(cpg, target_node, de_allocation):
             # print(f'Test path from {de_allocation} to {target_node} is {nx.shortest_path(cpg, de_allocation, target_node)}')
             # 遍历NULL赋值节点是否是在内存释放之后进行
             for node in assign_null_nodes:
@@ -252,11 +252,11 @@ class UseAfterFreeAnalyzer:
                 # print(f"Test Code of current data is {data}")
                 # 计算被释放的变量节点
                 var_name, var_node = get_var_name_node(self.cpg, node)
+                # print(f"Test3: node {var_node} and node {node_id}")
                 if (var_node != '' and var_node != '' and
                         not var_node == node_id and are_same_var(self.cpg, var_node, node_id)):
                     # print(f"Test3: node {var_node} and node {node_id} ara same")
                     de_allocation_nodes.add(var_node)
-            # 降低漏报场景，不考虑间接释放
         return de_allocation_nodes
 
     def get_free_node(self, matching_nodes: list):

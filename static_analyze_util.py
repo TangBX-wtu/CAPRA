@@ -1,6 +1,6 @@
 import networkx as nx
 import xml.etree.ElementTree as ET
-from typing import Set, Tuple
+from typing import Set, Tuple, List
 
 
 # 包含关系检查
@@ -28,6 +28,23 @@ def get_var_name(cpg: nx.MultiDiGraph, node_id: str):
     return None
 
 
+def find_local_global_nodes(cpg: nx.MultiDiGraph, target: str, current: str) -> List[str]:
+    same_vars = []
+    # 获得输入cpg的转置，方便计算别名变量
+    # print(f'aaa, current is {target}')
+    reverse_cpg = nx.reverse(cpg)
+    for neighbor in reverse_cpg.neighbors(target):
+        # print(f'bbb, neighbor is {neighbor}')
+        if neighbor != current:
+            edges = reverse_cpg.get_edge_data(target, neighbor)
+            for edge_data in edges.values():
+                if (edge_data['label'] in ['REF']
+                        and cpg.nodes[neighbor].get('label', 'Unknown') == 'IDENTIFIER'):
+                    same_vars.append(neighbor)
+    # print(f'Test same_vars {same_vars}')
+    return same_vars
+
+
 def track_aliases(cpg: nx.MultiDiGraph, start_node: str, visited=None) -> Set[str]:
     if visited is None:
         visited = set()
@@ -36,7 +53,7 @@ def track_aliases(cpg: nx.MultiDiGraph, start_node: str, visited=None) -> Set[st
         return set()
     # aliases = {get_var_name(cpg, start_node)}
     aliases = {start_node}
-
+    # print(f'current node is {start_node}, visited are {visited}')
     for neighbor in cpg.neighbors(start_node):
         if neighbor not in visited:
             edges = cpg.get_edge_data(start_node, neighbor)
@@ -47,6 +64,14 @@ def track_aliases(cpg: nx.MultiDiGraph, start_node: str, visited=None) -> Set[st
                             and cpg.nodes[neighbor].get('AST_PARENT_TYPE', 'Unknown') == 'NAMESPACE_BLOCK'
                             and cpg.nodes[neighbor].get('AST_PARENT_FULL_NAME', 'Unknown') == '<global>'):
                         continue
+                    # 如果是neighbor是局部或者全局变量，则找到其他指向这个节点的，find_local_global_alias(cpg,curr,local_global)
+                    # 把这些别名也放进来update
+                    # if 当前neighbor是local或者global，则调用新函数，并遍历找到的局部和全局节点别名，注意对应的局部/全局不能重复
+                    if cpg.nodes[neighbor].get('label', 'Unknown') in ['MEMBER', 'LOCAL']:
+                        visited.add(neighbor)
+                        aliases_var = find_local_global_nodes(cpg, neighbor, start_node)
+                        for var in aliases_var:
+                            aliases.update(track_aliases(cpg, var, visited))
                     aliases.update(track_aliases(cpg, neighbor, visited))
     return aliases
 
