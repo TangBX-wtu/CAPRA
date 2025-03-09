@@ -90,7 +90,7 @@ static void goodB2G2()
     if(5==5)
     {
         /* FIX: Deallocate memory */
-        ;
+        delete[] data;
     }
 }
 
@@ -103,15 +103,6 @@ static void goodG2B1()
     {
         /* INCIDENTAL: CWE 561 Dead Code, the code below will never run */
         printLine("Benign, fixed string");
-    }
-    else
-    {
-        /* FIX: Use memory allocated on the stack */
-        int64_t dataGoodBuffer[100];
-        data = dataGoodBuffer;
-        /* Initialize and make use of data */
-        data[0] = 5LL;
-        printLongLongLine(data[0]);
     }
     if(5==5)
     {

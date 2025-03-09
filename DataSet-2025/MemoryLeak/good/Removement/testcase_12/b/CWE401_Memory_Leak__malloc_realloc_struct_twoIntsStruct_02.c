@@ -67,7 +67,6 @@ static void good1()
             /* Initialize and make use of data */
             data[0].intOne = 0;
             data[0].intTwo = 0;
-            printStructLine((twoIntsStruct *)&data[0]);
             tmpData = (struct _twoIntsStruct *)realloc(data, (130000)*sizeof(struct _twoIntsStruct));
             /* FIX: Ensure realloc() was successful before assigning data to the memory block
             * allocated with realloc() */
@@ -79,6 +78,7 @@ static void good1()
                 data[0].intTwo = 1;
                 printStructLine((twoIntsStruct *)&data[0]);
             }
+            free(data);
         }
     }
 }

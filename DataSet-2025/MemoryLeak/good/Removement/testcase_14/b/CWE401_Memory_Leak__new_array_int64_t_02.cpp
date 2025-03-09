@@ -70,7 +70,7 @@ static void goodB2G1()
     else
     {
         /* FIX: Deallocate memory */
-        ;
+        delete[] data;
     }
 }
 
@@ -90,7 +90,7 @@ static void goodB2G2()
     if(1)
     {
         /* FIX: Deallocate memory */
-        ;
+        delete[] data;
     }
 }
 
@@ -111,7 +111,6 @@ static void goodG2B1()
         data = dataGoodBuffer;
         /* Initialize and make use of data */
         data[0] = 5LL;
-        printLongLongLine(data[0]);
     }
     if(1)
     {

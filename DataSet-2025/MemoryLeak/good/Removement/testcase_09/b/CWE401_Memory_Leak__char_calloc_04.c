@@ -73,7 +73,7 @@ static void goodB2G1()
     else
     {
         /* FIX: Deallocate memory */
-        ;
+        free(data);
     }
 }
 
@@ -89,12 +89,11 @@ static void goodB2G2()
         if (data == NULL) {exit(-1);}
         /* Initialize and make use of data */
         strcpy(data, "A String");
-        printLine(data);
     }
     if(STATIC_CONST_TRUE)
     {
         /* FIX: Deallocate memory */
-        ;
+        free(data);
     }
 }
 

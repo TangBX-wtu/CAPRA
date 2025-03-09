@@ -94,7 +94,7 @@ static void goodB2G2()
     if(staticTrue)
     {
         /* FIX: Deallocate memory */
-        ;
+        free(data);
     }
 }
 
@@ -111,10 +111,7 @@ static void goodG2B1()
     else
     {
         /* FIX: Use memory allocated on the stack with ALLOCA */
-        data = (char *)ALLOCA(100*sizeof(char));
-        /* Initialize and make use of data */
-        strcpy(data, "A String");
-        printLine(data);
+        ;
     }
     if(staticTrue)
     {

@@ -65,9 +65,9 @@ static void good1()
             data = tmpData;
             /* Reinitialize and make use of data */
             data[0].intOne = 1;
-            data[0].intTwo = 1;
             printStructLine((twoIntsStruct *)&data[0]);
         }
+        free(data);
     }
 }
 

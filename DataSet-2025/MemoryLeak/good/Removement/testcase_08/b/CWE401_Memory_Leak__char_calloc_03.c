@@ -67,7 +67,7 @@ static void goodB2G1()
     else
     {
         /* FIX: Deallocate memory */
-        ;
+        free(data);
     }
 }
 
@@ -76,20 +76,6 @@ static void goodB2G2()
 {
     char * data;
     data = NULL;
-    if(5==5)
-    {
-        /* POTENTIAL FLAW: Allocate memory on the heap */
-        data = (char *)calloc(100, sizeof(char));
-        if (data == NULL) {exit(-1);}
-        /* Initialize and make use of data */
-        strcpy(data, "A String");
-        printLine(data);
-    }
-    if(5==5)
-    {
-        /* FIX: Deallocate memory */
-        free(data);
-    }
 }
 
 /* goodG2B1() - use goodsource and badsink by changing the first 5==5 to 5!=5 */

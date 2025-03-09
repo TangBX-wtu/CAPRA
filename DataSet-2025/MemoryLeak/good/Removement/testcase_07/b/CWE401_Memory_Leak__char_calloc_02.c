@@ -67,7 +67,7 @@ static void goodB2G1()
     else
     {
         /* FIX: Deallocate memory */
-        ;
+        free(data);
     }
 }
 
@@ -122,19 +122,6 @@ static void goodG2B2()
 {
     char * data;
     data = NULL;
-    if(1)
-    {
-        /* FIX: Use memory allocated on the stack with ALLOCA */
-        data = (char *)ALLOCA(100*sizeof(char));
-        /* Initialize and make use of data */
-        strcpy(data, "A String");
-        printLine(data);
-    }
-    if(1)
-    {
-        /* POTENTIAL FLAW: No deallocation */
-        ; /* empty statement needed for some flow variants */
-    }
 }
 
 void CWE401_Memory_Leak__char_calloc_02_good()
