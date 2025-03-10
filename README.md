@@ -5,3 +5,8 @@
  2) Ubuntu 22.04.4
  3) Joern 2.0.4
  4) NetworkX 3.3
+
+DataSet:
+UAF and Memory leak: data from manually modified SARD-2022-08-11-juliet
+Hypocrite Commit: test cases from "Hypocrite Commit"
+OpenSSH and Linux: legitimate patches randomly selected from the corresponding open source project
