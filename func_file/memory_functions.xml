@@ -6,6 +6,7 @@
         <function>realloc</function>
         <function>new</function>
         <function>kzalloc</function>
+        <function>strdup</function>
     </allocation>
     <deallocation>
         <function>free</function>
