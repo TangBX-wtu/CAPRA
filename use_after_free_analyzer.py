@@ -1,6 +1,8 @@
 import networkx as nx
 import unidiff
 from typing import Tuple, Set
+
+from determine_order import analyze_nodes_order
 from static_analyze_util import data_check, are_same_var, is_condition_structure, has_condition_node_in_path, \
     is_indirect_call_equal, get_var_name_node, is_memory_operation, get_var_operation_node, memory_func_init
 
@@ -29,7 +31,7 @@ class UseAfterFreeAnalyzer:
             node, var = self.get_free_node(matching_nodes)
             # 如果是free节点，则分析变量的后续使用情况
             if var != '' and node != '':
-                print(f'Test currnt node is {node}')
+                # print(f'Test currnt node is {node}')
                 # 在cpg中查找变量var是否还在继续使用
                 uses = self.get_all_use_path(node, var, self.light_cpg)
                 uses = self.uses_path_clear(matching_nodes, uses)
@@ -54,6 +56,7 @@ class UseAfterFreeAnalyzer:
                 if len(de_allocations) != 0:
                     # print(f"Test, free nodes are {de_allocations}")
                     all_assign_null_nodes = self.get_all_assign_null_node(self.cpg, node)
+                    # print(f"Test, nullified nodes are {all_assign_null_nodes}")
                     # 检测free节点和var节点之间是否有通路，通路中是否设置了NULL
                     for de_allocation in de_allocations:
                         # find_de_allocations中已经计算过变量的一致性/别名，在这里的cpg需要排除掉通过source_file进行连接的函数关系
@@ -137,10 +140,15 @@ class UseAfterFreeAnalyzer:
             for node in assign_null_nodes:
                 if nx.has_path(cpg, de_allocation, node) and not has_condition_node_in_path(cpg, de_allocation, node):
                     if nx.has_path(cpg, node, target_node):
-                        print(f"Find assignment to NULL after free, node id is {node}")
+                        # print(f"Test, Find assignment to NULL after free, node id is {node}")
                         # 内存释放节点和内存操作节点之间如果存在赋值NULL，则可能存在空指针漏洞
                         return self.NULL_POINT_VUL
             # 内存释放节点和内存操作节点之间如果存在通路，但是又没有将指针设置为NULL，则存在UAF漏洞
+            return self.UAF_VUL
+        # 如果没有直接路径，但是是对同一个内存地址操作，那么free在use之前也是认为存在UAF漏洞。
+        # 在查询dealloc时已经判断了是同一地址，那么就需要判断free和use的顺序，或者说这里需要的就是一个执行顺序的计算逻辑
+        elif analyze_nodes_order(self.cpg, de_allocation, target_node) == 0:
+            # print(f'Test, deallocate node {de_allocation} is before use node {target_node}')
             return self.UAF_VUL
         else:
             # free和添加的变量内存操作没有通路，则说明没有UAF缺陷，我们研究的前提假设是base代码是安全的，所以默认之前的free后已经对变量进行了NULL赋值
