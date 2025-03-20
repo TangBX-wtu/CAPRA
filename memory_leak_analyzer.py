@@ -12,8 +12,8 @@ class MemoryLeakAnalyzer:
         self.allocations: Dict[str, Set[str]] = {}  # 变量到分配点的映射
         self.de_allocations: Dict[str, Set[str]] = {}  # 变量到释放点的映射
         self.indirect_call_func = ''
-        self.allocation_funcs, self.deallocation_funcs, self.memory_operation = memory_func_init('func_file/memory_functions.xml')
-
+        self.allocation_funcs, self.deallocation_funcs, self.memory_operation = memory_func_init(
+            'func_file/memory_functions.xml')
 
     def analyze_potential_leak(self, matching_nodes: list, line: unidiff.patch.Line, file_type: str) -> Tuple[
         bool, str]:
@@ -66,7 +66,7 @@ class MemoryLeakAnalyzer:
             # print(f"Test, node_op and var_op are {node_op} {var_op}")
             # 如果当前行没有涉及内存操作，但是有变量操作，则需要反向查找当前变量在前面是否有内存分配操作
             if not var and node_op:
-                # 反向查找var_op的内存分配
+                # 反向查找var_op的内存分配，不考虑间接调用的函数返回指针，本质上这种内存泄漏已经存在，而不是由补丁引入
                 node_op_alloc = self.find_alloc_by_var(node_op)
                 if node_op_alloc != '':
                     # print(f"Test, node_op_alloc is {node_op_alloc}")

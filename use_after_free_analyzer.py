@@ -13,7 +13,7 @@ class UseAfterFreeAnalyzer:
     UAF_RISK = 2
     SAFE = 3
 
-    def __init__(self, cpg: nx.MultiDiGraph):
+    def __init__(self, cpg: nx.MultiDiGraph, strict: bool):
         self.cpg = cpg
         edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'AST']
         data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] in edge_type]
@@ -21,6 +21,7 @@ class UseAfterFreeAnalyzer:
         data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] != 'SOURCE_FILE']
         self.cpg_without_source_file = nx.MultiDiGraph(data_flow_edges)
         self.allocation_funcs, self.deallocation_funcs, self.memory_operation = memory_func_init('func_file/memory_functions.xml')
+        self.strict = strict
 
     def analyze_potential_uaf(self, matching_nodes: list, line: unidiff.patch.Line, file_type: str) -> Tuple[
         bool, str]:
@@ -168,13 +169,13 @@ class UseAfterFreeAnalyzer:
                 result_str = (
                     f"Adding line {line.target_line_no}: '{line.value.strip()}' may lead to a NULL point vulnerability "
                     f"where variable {var_name} is still used after being assigned NULL.")
-                result_bool = True
+                result_bool = not self.strict
             elif res_no == self.UAF_RISK:
                 result_str = (
                     f"Adding line {line.target_line_no}: '{line.value.strip()}' poses a potential UAF "
                     f"vulnerability risk because the variable {var_name} is not assigned a NULL value "
                     f"after memory is freed")
-                result_bool = True
+                result_bool = not self.strict
             else:
                 result_str = f"Adding line {line.target_line_no}: '{line.value.strip()}' has no UAF risk."
                 result_bool = False
@@ -188,13 +189,13 @@ class UseAfterFreeAnalyzer:
                 result_str = (
                     f"Removing line {line.source_line_no}: '{line.value.strip()}' may lead to a NULL point vulnerability "
                     f"where variable {var_name} is still used after being assigned NULL.")
-                result_bool = True
+                result_bool = not self.strict
             elif res_no == self.UAF_RISK:
                 result_str = (
                     f"Removing line {line.source_line_no}: '{line.value.strip()}' poses a potential UAF "
                     f"vulnerability risk because the variable {var_name} is not assigned a NULL value "
                     f"after memory is freed")
-                result_bool = True
+                result_bool = not self.strict
             else:
                 result_str = f"Adding line {line.source_line_no}: '{line.value.strip()}' has no UAF risk."
                 result_bool = False
