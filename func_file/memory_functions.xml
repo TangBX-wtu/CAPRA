@@ -11,6 +11,7 @@
     <deallocation>
         <function>free</function>
         <function>&lt;operator&gt;.delete</function>
+        <function>delete</function>
         <function>kfree</function>
         <function>put_device</function>
     </deallocation>
@@ -18,13 +19,17 @@
         <operation>memcpy</operation>
         <operation>memmove</operation>
         <operation>&lt;operator&gt;.pointerCall</operation>
+        <operation>pointerCall</operation>
         <operation>free</operation>
         <operation>kfree</operation>
         <operation>strcpy</operation>
         <operation>printf</operation>
         <operation>print</operation>
         <operation>&lt;operator&gt;.indirection</operation>
+        <operation>indirection</operation>
         <operation>&lt;operator&gt;.postIncrement</operation>
+        <operation>postIncrement</operation>
         <operation>&lt;operator&gt;.indirectIndexAccess</operation>
+        <operation>indirectIndexAccess</operation>
     </memory>
 </memory_functions>
