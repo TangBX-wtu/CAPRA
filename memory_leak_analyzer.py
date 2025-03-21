@@ -62,24 +62,25 @@ class MemoryLeakAnalyzer:
         elif file_type == 'target':
             # target对应添加场景，要分析malloc/calloc/realloc/new(c++)，还有一些间接内存创建，以及变量操作（这是已经产生漏洞的情况）
             node, var = self.get_alloc_node(matching_nodes)
+            print(f"Test, alloc node and var are {node} {var}")
             node_op, var_op = get_var_operation_node(self.cpg, matching_nodes, self.memory_operation)
-            # print(f"Test, node_op and var_op are {node_op} {var_op}")
+            print(f"Test, node_op and var_op are {node_op} {var_op}")
             # 如果当前行没有涉及内存操作，但是有变量操作，则需要反向查找当前变量在前面是否有内存分配操作
-            if not var and node_op:
+            if var == '' and node_op:
                 # 反向查找var_op的内存分配，不考虑间接调用的函数返回指针，本质上这种内存泄漏已经存在，而不是由补丁引入
                 node_op_alloc = self.find_alloc_by_var(node_op)
                 if node_op_alloc != '':
                     # print(f"Test, node_op_alloc is {node_op_alloc}")
                     node, var = self.get_var_name_node(node_op_alloc)
-            elif var != '' and node_op != '':
+            elif var == '' and node_op == '':
                 return False, "No var in matching nodes."
             # print(f"Node id is {node}, and var name is {var}")
             allocation_nodes = set()
             de_allocation_nodes = set()
-            if node:
+            if node != '':
                 allocation_nodes = self.find_all_allocations(var, node, file_type)
                 de_allocation_nodes = self.find_de_allocations(file_type, node)
-            elif node_op:
+            elif node_op != '':
                 # print(f"Test node op")
                 allocation_nodes = self.find_all_allocations(node_op, node_op, file_type)
                 de_allocation_nodes = self.find_de_allocations(file_type, node_op)
