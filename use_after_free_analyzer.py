@@ -15,12 +15,13 @@ class UseAfterFreeAnalyzer:
 
     def __init__(self, cpg: nx.MultiDiGraph, strict: bool):
         self.cpg = cpg
-        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'AST']
+        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'REF', 'CFG']
         data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] in edge_type]
         self.light_cpg = nx.MultiDiGraph(data_flow_edges)
         data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] != 'SOURCE_FILE']
         self.cpg_without_source_file = nx.MultiDiGraph(data_flow_edges)
-        self.allocation_funcs, self.deallocation_funcs, self.memory_operation = memory_func_init('func_file/memory_functions.xml')
+        self.allocation_funcs, self.deallocation_funcs, self.memory_operation = memory_func_init(
+            'func_file/memory_functions.xml')
         self.strict = strict
 
     def analyze_potential_uaf(self, matching_nodes: list, line: unidiff.patch.Line, file_type: str) -> Tuple[
@@ -35,7 +36,9 @@ class UseAfterFreeAnalyzer:
                 # print(f'Test currnt node is {node}')
                 # 在cpg中查找变量var是否还在继续使用
                 uses = self.get_all_use_path(node, var, self.light_cpg)
+                # print(f'Test uses path is {uses}')
                 uses = self.uses_path_clear(matching_nodes, uses)
+                # print(f'Test uses path of {node} is {uses}')
                 if len(uses) == 0:
                     # print("Test: use len is 0")
                     res, res_str = self.result_format(self.UAF_RISK, file_type, line, var)
@@ -141,7 +144,6 @@ class UseAfterFreeAnalyzer:
             for node in assign_null_nodes:
                 if nx.has_path(cpg, de_allocation, node) and not has_condition_node_in_path(cpg, de_allocation, node):
                     if nx.has_path(cpg, node, target_node):
-                        # print(f"Test, Find assignment to NULL after free, node id is {node}")
                         # 内存释放节点和内存操作节点之间如果存在赋值NULL，则可能存在空指针漏洞
                         return self.NULL_POINT_VUL
             # 内存释放节点和内存操作节点之间如果存在通路，但是又没有将指针设置为NULL，则存在UAF漏洞
@@ -291,26 +293,28 @@ class UseAfterFreeAnalyzer:
 
     # 遍历变量的使用路径
     def get_var_use_path(self, node_id: str, var: str, graph: nx.MultiDiGraph) -> list:
-        uses = []
+        uses = set()
         # 因为是跟踪变量的使用情况，所以这里需要在light_cpg中遍历
         for succ in nx.dfs_preorder_nodes(graph, node_id):
             node_type = self.cpg.nodes[succ].get('label', 'Unknown')
-            if node_type == 'IDENTIFIER':
-                uses.append(succ)
+            if (node_type == 'IDENTIFIER' and are_same_var(self.cpg, node_id, succ)
+                    and analyze_nodes_order(self.cpg, node_id, succ) == 0):
+                uses.add(succ)
             elif node_type == 'CALL':
                 # 判断是否是当前node的argument
                 var_name, current_node = get_var_name_node(self.cpg, succ)
                 # print(f'Test 5: node_id is {node_id}, current_node is {current_node}')
-                if current_node != '' and are_same_var(self.cpg, node_id, current_node):
-                    uses.append(succ)
-        return uses
+                if (current_node != '' and are_same_var(self.cpg, node_id, current_node)
+                        and analyze_nodes_order(self.cpg, node_id, current_node) == 0):
+                    uses.add(current_node)
+        return list(uses)
 
     # 创建一个新的函数get_all_use_path，先从当前函数开始分析，再从入参调用开始分析
     def get_all_use_path(self, node_id: str, var: str, graph: nx.MultiDiGraph) -> list:
         uses = []
         # 在当前函数下文中的使用路径
         uses = self.get_var_use_path(node_id, var, graph)
-
+        # print(f'uses[] are {uses}')
         # 判断是否与当过前函数入参存在数据关系
         parameters_in, method_id = self.get_current_method_parameter_in(node_id)
         # 记录存在数据关系的入参
