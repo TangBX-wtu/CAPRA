@@ -63,7 +63,8 @@ def track_aliases(cpg: nx.MultiDiGraph, start_node: str, visited=None) -> Set[st
                     if ((cpg.nodes[neighbor].get('label', 'Unknown') == 'METHOD'
                          and cpg.nodes[neighbor].get('AST_PARENT_TYPE', 'Unknown') == 'NAMESPACE_BLOCK'
                          and cpg.nodes[neighbor].get('AST_PARENT_FULL_NAME', 'Unknown') == '<global>')
-                            or (cpg.nodes[neighbor].get('label', 'Unknown') == 'METHOD_RETURN')):
+                            or (cpg.nodes[neighbor].get('label', 'Unknown') == 'METHOD_RETURN'
+                                and cpg.nodes[neighbor].get('TYPE_FULL_NAME', 'Unknown') == 'void')):
                         continue
                     # 如果是neighbor是局部或者全局变量，则找到其他指向这个节点的，find_local_global_alias(cpg,curr,local_global)
                     # 把这些别名也放进来update
