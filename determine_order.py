@@ -164,11 +164,11 @@ def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
     if method1 != '' and method2 != '' and method1 == method2:
         # 在同一函数内，使用CFG边和node id大小判断
         try:
-            if nx.has_path(cpg, node1, node2) and node1 < node2:
+            if nx.has_path(cpg, node1, node2) and int(node1) < int(node2):
                 # print(f'Test, 节点{node1}在节点{node2}之前执行')
                 return pre
 
-            if nx.has_path(cpg, node2, node1) and node1 > node2:
+            if nx.has_path(cpg, node2, node1) and int(node1) > int(node2):
                 # print(f'Test, 节点{node2}在节点{node1}之前执行')
                 return post
             # print(f'Test, 无法确定执行顺序，节点之间没有路径')
