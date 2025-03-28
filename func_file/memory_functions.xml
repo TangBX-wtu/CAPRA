@@ -4,7 +4,7 @@
         <function>malloc</function>
         <function>calloc</function>
         <function>realloc</function>
-        <function>new</function>
+        <function>&lt;operator&gt;.new</function>
         <function>kzalloc</function>
         <function>strdup</function>
     </allocation>
@@ -31,5 +31,11 @@
         <operation>postIncrement</operation>
         <operation>&lt;operator&gt;.indirectIndexAccess</operation>
         <operation>indirectIndexAccess</operation>
+        <operation>&lt;operator&gt;.indirectFieldAccess</operation>
+        <operation>indirectFieldAccess</operation>
+        <operation>&lt;operator&gt;.addressOf</operation>
+        <operation>addressOf</operation>
+        <operation>printLine</operation>
+        <operation>wmemset</operation>
     </memory>
 </memory_functions>
