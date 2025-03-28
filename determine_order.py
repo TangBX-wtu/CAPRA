@@ -32,12 +32,12 @@ def find_method_node(cpg: nx.MultiDiGraph, node_id: str):
 def get_method_name(cpg: nx.MultiDiGraph, method_node: str):
     # 从METHOD节点获取函数名
     if method_node == '':
-        return "unknown"
+        return ''
     label = cpg.nodes[method_node].get('label', '')
     match = re.search(r'NAME="([^"]+)"', label)
     if match:
         return match.group(1)
-    return "unknown"
+    return ''
 
 
 def find_contained_nodes(cpg: nx.MultiDiGraph, method_id: str):
@@ -180,7 +180,7 @@ def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
         # 在不同函数中
         method1_name = get_method_name(cpg, method1)
         method2_name = get_method_name(cpg, method2)
-        if method1_name == 'unknown' or method2_name == 'unknown':
+        if method1_name == '' or method2_name == '':
             return unknown
         # 构建完整的函数调用图
         call_graph = build_call_graph(cpg)
