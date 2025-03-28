@@ -2,7 +2,7 @@ import networkx as nx
 import unidiff
 from typing import Tuple, Set
 
-from determine_order import analyze_nodes_order
+from determine_order import analyze_nodes_order, determine_execution_order
 from static_analyze_util import data_check, are_same_var, is_condition_structure, has_condition_node_in_path, \
     is_indirect_call_equal, get_var_name_node, is_memory_operation, get_var_operation_node, memory_func_init
 
@@ -51,10 +51,20 @@ class UseAfterFreeAnalyzer:
                     return res, res_str
             # 如果是变量内存操作节点，则分析该变量是否在之前被free
             node, var = get_var_operation_node(self.cpg, matching_nodes, self.memory_operation)
-            # print(f"Test use var name is {var}")
             # 反向遍历变量是否被free过：找到全局对应上述变量的free，看看是否有通路
             # 如果找到free的节点，则计算他们的通路，并在通路之间查看是否有赋值为NULL的节点 G.reverse()
             if var != '' and node != '':
+                if self.is_assign_null(node, node):
+                    uses = self.get_all_use_path(node, var, self.light_cpg)
+                    uses = self.uses_path_clear(matching_nodes, uses)
+                    # print(f'Test, uses path is {uses}')
+                    if len(uses) == 0 or self.is_post_alloc(uses, node):
+                        res, res_str = self.result_format(self.SAFE, file_type, line, var)
+                    else:
+                        # 这里可能产生误报：如果nullified后面跟着malloc，则会出现误报，但是增加判断逻辑价值不高
+                        res, res_str = self.result_format(self.NULL_POINT_VUL, file_type, line, var)
+                    return res, res_str
+
                 de_allocations = self.find_de_allocations(var, node)
                 # print(f'Test de_allocations nodes are {de_allocations}')
                 if len(de_allocations) != 0:
@@ -100,6 +110,7 @@ class UseAfterFreeAnalyzer:
                 uses = self.get_all_use_path(node, var, self.light_cpg)
                 # 因为是删除操作，所以需要在use path中删除当前赋值NULL的节点，也就是matching nodes
                 uses = self.uses_path_clear(matching_nodes, uses)
+                # print(f'Test uses path from node {node} is {uses}')
                 if len(uses) == 0:
                     # 删除了var == NULL，且后续没有操作，则可能未来引入UAF的风险
                     res, res_str = self.result_format(self.UAF_RISK, file_type, line, var)
@@ -110,10 +121,48 @@ class UseAfterFreeAnalyzer:
                     return res, res_str
         return False, "Can not find potential use-after-free risk for current committed line"
 
+    def is_post_alloc(self, uses_path: list, nullified_node: str) -> bool:
+        post_node = uses_path[0]
+        # print(f'Test, post_node is {post_node}')
+        if self.cpg.has_node(post_node) and determine_execution_order(self.cpg, nullified_node, post_node) == 0:
+            label = self.cpg.nodes[post_node].get('label', 'Unknown')
+            if (label == 'CALL'
+                    and self.cpg.nodes[post_node].get('METHOD_FULL_NAME', 'Unknown') in self.allocation_funcs):
+                return True
+            elif label == 'IDENTIFIER':
+                line_num = self.cpg.nodes[post_node].get('LINE_NUMBER', 'Unknown')
+                same_l_nodes = [n for n, d in self.cpg.nodes(data=True) if d.get('LINE_NUMBER', 'Unknown') == line_num]
+                for node in same_l_nodes:
+                    if (self.cpg.nodes[node].get('label', 'Unknown') == 'CALL'
+                            and self.cpg.nodes[node].get('METHOD_FULL_NAME', 'Unknown') in self.allocation_funcs):
+                        return True
+                for neighbor in self.cpg.neighbors(post_node):
+                    neighbor_line_num = self.cpg.nodes[neighbor].get('LINE_NUMBER', 'Unknown')
+                    if neighbor_line_num != line_num:
+                        continue
+                    if (self.cpg.nodes[neighbor].get('label', 'Unknown') == 'CALL'
+                            and self.cpg.nodes[neighbor].get('METHOD_FULL_NAME', 'Unknown') in self.allocation_funcs):
+                        return True
+        return False
+
+    def sort_for_nodes(self, uses_path: list) -> list:
+        n = len(uses_path)
+        if n <= 1:
+            return uses_path
+        for i in range(0, n):
+            for j in range(0, n-i-1):
+                if analyze_nodes_order(self.cpg, uses_path[j], uses_path[j+1]) == 1:
+                    (uses_path[j], uses_path[j+1]) = (uses_path[j+1], uses_path[j])
+        return uses_path
+
     def uses_path_clear(self, matching_nodes: list, uses_path: list) -> list:
+        uses_path = list(dict.fromkeys(uses_path))
         for node, data in matching_nodes:
-            if node in uses_path:
-                uses_path.remove(node)
+            for tmp in uses_path:
+                if tmp == node:
+                    uses_path.remove(tmp)
+        # 对use list中的节点根据调用顺序进行排序，因为dfs算法找到的节点顺序是混乱的
+        uses_path = self.sort_for_nodes(uses_path)
         return uses_path
 
     def get_remove_assign_null(self, matching_nodes: list) -> tuple[str, str]:
@@ -209,6 +258,7 @@ class UseAfterFreeAnalyzer:
         has_condition_node = False
         # 找到第一个赋值NULL操作(joern中将赋值也看作call)，并且要判断是否存在条件语句，应对Hypo攻击
         for use in uses:
+            # print(f'Test, current node is {use}')
             # node_type = self.cpg.nodes[use].get('label', 'Unknown')
             if is_condition_structure(self.cpg, use):
                 has_condition_node = True
@@ -218,7 +268,7 @@ class UseAfterFreeAnalyzer:
                 if (not has_assign_null) and (not has_condition_node):
                     has_assign_null = True
             elif is_memory_operation(self.cpg, use, self.memory_operation):
-                # print(f'Test memory opertion node is {use}')
+                # print(f'node {use} is memory operation')
                 if has_assign_null:
                     has_uaf = self.NULL_POINT_VUL
                     return has_uaf
@@ -249,6 +299,11 @@ class UseAfterFreeAnalyzer:
                             and null_name == 'NULL' and check_same_var):
                         return True
             return False
+        elif node_type == 'IDENTIFIER':
+            order = self.cpg.nodes[node_id].get('ORDER', 'Unknown')
+            if order != 'Unknown':
+                pre_node = str(int(node_id) - int(order))
+                return self.is_assign_null(pre_node, target_node)
         return False
 
     def find_de_allocations(self, var: str, node_id: str) -> Set[str]:

@@ -155,18 +155,20 @@ def compare_program_order(cpg: nx.MultiDiGraph, method1: str, method2: str, node
 
 
 def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
+    if node1 == node2:
+        return unknown
     # 确定两个节点的执行顺序
     method1 = find_method_node(cpg, node1)
     method2 = find_method_node(cpg, node2)
     # print(f'Test method1 is {method1}, method2 is {method2}')
     if method1 != '' and method2 != '' and method1 == method2:
-        # 在同一函数内，使用CFG边判断
+        # 在同一函数内，使用CFG边和node id大小判断
         try:
-            if nx.has_path(cpg, node1, node2):
+            if nx.has_path(cpg, node1, node2) and node1 < node2:
                 # print(f'Test, 节点{node1}在节点{node2}之前执行')
                 return pre
 
-            if nx.has_path(cpg, node2, node1):
+            if nx.has_path(cpg, node2, node1) and node1 > node2:
                 # print(f'Test, 节点{node2}在节点{node1}之前执行')
                 return post
             # print(f'Test, 无法确定执行顺序，节点之间没有路径')
@@ -178,7 +180,8 @@ def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
         # 在不同函数中
         method1_name = get_method_name(cpg, method1)
         method2_name = get_method_name(cpg, method2)
-        # print(f'Test method1_name is {method1_name}, method2_name is {method2_name}')
+        if method1_name == 'unknown' or method2_name == 'unknown':
+            return unknown
         # 构建完整的函数调用图
         call_graph = build_call_graph(cpg)
 

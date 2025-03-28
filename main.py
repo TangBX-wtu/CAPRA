@@ -123,6 +123,7 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
     risk_set = set()
     if len(lines) < 0:
         return
+    update_result(case_path, 'Init')
     graph = read_dot(dot_file_path)
     # print(f"Test dot_file_path is {dot_file_path}")
     # 创建缺陷解析器实例
@@ -164,6 +165,7 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
             ml_end_time = time.time()
             print(f'Memory leak analysis for a single line takes time: {(ml_end_time - ml_start_time) * 1000:.3f} ms')
             # print(f"Test res_str of memory leak analyze is {res_str}")
+
             if risk:
                 risk_set.add(res_str)
                 update_result(case_path, 'MemoryLeak')
@@ -370,13 +372,13 @@ if __name__ == '__main__':
     # 初始化结果文件
     init_result_file()
     # 对测试用例的数据进行预处理，输入为测试用例目录，创建diff文件，生成patch文件和cpg文件
-    test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF"
-    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF/bad/Removement/testcase_17"
-    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/Hypocrite-Commit/case_3"
+    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF"
+    test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF/good/Addition/testcase_49"
+    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/Hypocrite-Commit/case_2"
     # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/CVE-2019012819"
 
     # 针对UAF和MemoryLeak下的批量实验，is_root_path为True；单个case实验is_root_path为False
-    execute_by_path(test_case_path, True, True, True)
+    execute_by_path(test_case_path, False, False, False)
 
-    # 按需删除产生的outA,outB和patch-info
+    # 按需删除产生的outA,outB和patch-info，慎用，删除patch的时候删除了a目录，要看下哪里写错了
     # clear_intermediate_files(test_case_path)

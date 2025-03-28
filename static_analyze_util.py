@@ -199,6 +199,10 @@ def are_same_var(cpg: nx.MultiDiGraph, source_node_id: str, target_node_id: str)
 
 
 def is_condition_structure(cpg: nx.MultiDiGraph, node_id: str) -> bool:
+    if cpg.nodes[node_id].get('label', 'Unknown') == 'IDENTIFIER':
+        pre_node = str(int(node_id) - 1)
+        if cpg.has_node(pre_node):
+            return is_condition_structure(cpg, pre_node)
     if cpg.nodes[node_id].get('label', 'Unknown') == 'CONTROL_STRUCTURE':
         return True
     elif (cpg.nodes[node_id].get('label', 'Unknown') == 'CALL'
@@ -351,10 +355,9 @@ def is_memory_operation(cpg: nx.MultiDiGraph, node_id: str, memory_operation: li
         if '[' in node_code and ']' in node_code:
             return True
         # 调用函数是否为内存相关操作
-        post_node = str(int(node_id) - 1)
-        if (cpg.has_node(post_node) and cpg.nodes[post_node].get('label', 'Unknown') == 'CALL'
-                and cpg.nodes[post_node].get('NAME', 'Unknown') in memory_operation):
-            return True
+        pre_node = str(int(node_id) - 1)
+        if cpg.has_node(pre_node) and cpg.nodes[pre_node].get('label', 'Unknown') == 'CALL':
+            return is_memory_operation(cpg, pre_node, memory_operation)
     # 判断相邻节点是否有内存相关操作
     for neighbor in cpg.neighbors(node_id):
         if (cpg.nodes[neighbor].get('label', 'Unknown') == 'MEMBER'
