@@ -54,7 +54,9 @@ class UseAfterFreeAnalyzer:
             # 反向遍历变量是否被free过：找到全局对应上述变量的free，看看是否有通路
             # 如果找到free的节点，则计算他们的通路，并在通路之间查看是否有赋值为NULL的节点 G.reverse()
             if var != '' and node != '':
+                # print(f'Test, operation node is {node}, var is {var}')
                 if self.is_assign_null(node, node):
+                    # print(f'Test, current operation is nullified')
                     uses = self.get_all_use_path(node, var, self.light_cpg)
                     uses = self.uses_path_clear(matching_nodes, uses)
                     # print(f'Test, uses path is {uses}')
@@ -191,8 +193,9 @@ class UseAfterFreeAnalyzer:
             # print(f'Test path from {de_allocation} to {target_node} is {nx.shortest_path(cpg, de_allocation, target_node)}')
             # 遍历NULL赋值节点是否是在内存释放之后进行
             for node in assign_null_nodes:
-                if nx.has_path(cpg, de_allocation, node) and not has_condition_node_in_path(cpg, de_allocation, node):
-                    if nx.has_path(cpg, node, target_node):
+                if (nx.has_path(cpg, de_allocation, node) and analyze_nodes_order(self.cpg, de_allocation, node) == 0
+                        and not has_condition_node_in_path(cpg, de_allocation, node)):
+                    if nx.has_path(cpg, node, target_node) and analyze_nodes_order(self.cpg, node, target_node) == 0:
                         # 内存释放节点和内存操作节点之间如果存在赋值NULL，则可能存在空指针漏洞
                         return self.NULL_POINT_VUL
             # 内存释放节点和内存操作节点之间如果存在通路，但是又没有将指针设置为NULL，则存在UAF漏洞
