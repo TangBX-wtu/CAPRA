@@ -74,7 +74,7 @@ def generate_cpg(code_path):
               f" sudo ./joern-export --repr=all --format=dot --out {code_path}/b/outB")
 
 
-def update_result(case_path: str, vul_type: str):
+def update_result(case_path: str, vul_type: str, risk: bool):
     results_file = 'results/results.xlsx'
     # 如果case_path不存在则新建一行，并先都填入0
     if os.path.exists(results_file):
@@ -104,18 +104,18 @@ def update_result(case_path: str, vul_type: str):
             next_row = last_row + 1
             worksheet.cell(row=next_row, column=1).value = case_path
 
-            for col_index in range(2, 6):
+            for col_index in range(2, 4):
                 worksheet.cell(row=next_row, column=col_index).value = 0
-            if vul_type == 'UAF':
+            if vul_type == 'UAF' and risk:
                 worksheet.cell(row=next_row, column=2).value = 1
-            if vul_type == 'MemoryLeak':
-                worksheet.cell(row=next_row, column=4).value = 1
+            if vul_type == 'MemoryLeak' and risk:
+                worksheet.cell(row=next_row, column=3).value = 1
             workbook.save(results_file)
         else:
-            if vul_type == 'UAF':
+            if vul_type == 'UAF' and risk:
                 worksheet.cell(row=duplicate_row, column=2).value = 1
-            if vul_type == 'MemoryLeak':
-                worksheet.cell(row=duplicate_row, column=4).value = 1
+            if vul_type == 'MemoryLeak' and risk:
+                worksheet.cell(row=duplicate_row, column=3).value = 1
             workbook.save(results_file)
 
 
@@ -123,7 +123,7 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
     risk_set = set()
     if len(lines) < 0:
         return
-    update_result(case_path, 'Init')
+    update_result(case_path, 'Init', False)
     graph = read_dot(dot_file_path)
     # print(f"Test dot_file_path is {dot_file_path}")
     # 创建缺陷解析器实例
@@ -168,7 +168,7 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
 
             if risk:
                 risk_set.add(res_str)
-                update_result(case_path, 'MemoryLeak')
+                update_result(case_path, 'MemoryLeak', risk)
             # 2.检测UAF风险
             uaf_start_time = time.time()
             risk, res_str = use_after_free_analyzer.analyze_potential_uaf(matching_nodes, line, file_type)
@@ -177,7 +177,7 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
             # print(f"Test res_str of use after free analyze is {res_str}")
             if risk:
                 risk_set.add(res_str)
-                update_result(case_path, 'UAF')
+                update_result(case_path, 'UAF', risk)
     return risk_set
 
 
@@ -192,7 +192,7 @@ def dot_to_image(file_path, out_put_path, format='png'):
 
 
 # 递归删除某个名称的目录
-def delete_folders(root_path, folder_names):
+def delete_folders(root_path, folder_name):
     if not os.path.exists(root_path) or not os.path.isdir(root_path):
         print(f"Error: Path '{root_path}' does not exist or is not a directory.")
         return 0
@@ -207,7 +207,7 @@ def delete_folders(root_path, folder_names):
         item_path = os.path.join(root_path, item)
 
         if os.path.isdir(item_path):
-            if item in folder_names:
+            if item == folder_name and item_path.endswith(folder_name):
                 print(f"Remove directory: {item_path}")
                 try:
                     # shutil.rmtree(item_path)
@@ -221,7 +221,7 @@ def delete_folders(root_path, folder_names):
 
     # 递归处理剩余子目录
     for dir_path in dirs_to_process:
-        count += delete_folders(dir_path, folder_names)
+        count += delete_folders(dir_path, folder_name)
 
     return count
 
@@ -373,12 +373,12 @@ if __name__ == '__main__':
     init_result_file()
     # 对测试用例的数据进行预处理，输入为测试用例目录，创建diff文件，生成patch文件和cpg文件
     # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF"
-    test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF/good/Addition/testcase_49"
-    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/Hypocrite-Commit/case_2"
+    # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF/bad/Removement/testcase_15"
+    test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/Hypocrite-Commit/case_3"
     # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/CVE-2019012819"
 
     # 针对UAF和MemoryLeak下的批量实验，is_root_path为True；单个case实验is_root_path为False
     execute_by_path(test_case_path, False, False, False)
 
-    # 按需删除产生的outA,outB和patch-info，慎用，删除patch的时候删除了a目录，要看下哪里写错了
+    # 按需删除产生的outA,outB和patch-info
     # clear_intermediate_files(test_case_path)

@@ -14,6 +14,9 @@ class MemoryLeakAnalyzer:
         self.indirect_call_func = ''
         self.allocation_funcs, self.deallocation_funcs, self.memory_operation = memory_func_init(
             'func_file/memory_functions.xml')
+        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'AST']
+        data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] in edge_type]
+        self.data_flow_graph = nx.MultiDiGraph(data_flow_edges)
 
     def analyze_potential_leak(self, matching_nodes: list, line: unidiff.patch.Line, file_type: str) -> Tuple[
         bool, str]:
@@ -63,40 +66,24 @@ class MemoryLeakAnalyzer:
             # target对应添加场景，要分析malloc/calloc/realloc/new(c++)，还有一些间接内存创建，以及变量操作（这是已经产生漏洞的情况）
             node, var = self.get_alloc_node(matching_nodes)
             # print(f"Test, alloc node and var are {node} {var}")
-            node_op, var_op = get_var_operation_node(self.cpg, matching_nodes, self.memory_operation)
-            # print(f"Test, node_op and var_op are {node_op} {var_op}")
-            # 如果当前行没有涉及内存操作，但是有变量操作，则需要反向查找当前变量在前面是否有内存分配操作
-            if var == '' and node_op:
-                # 反向查找var_op的内存分配，不考虑间接调用的函数返回指针，本质上这种内存泄漏已经存在，而不是由补丁引入
-                node_op_alloc = self.find_alloc_by_var(node_op)
-                if node_op_alloc != '':
-                    # print(f"Test, node_op_alloc is {node_op_alloc}")
-                    node, var = self.get_var_name_node(node_op_alloc)
-            elif var == '' and node_op == '':
-                return False, "No var in matching nodes."
-            # print(f"Node id is {node}, and var name is {var}")
-            allocation_nodes = set()
-            de_allocation_nodes = set()
             if node != '':
                 allocation_nodes = self.find_all_allocations(var, node, file_type)
                 de_allocation_nodes = self.find_de_allocations(file_type, node)
-            elif node_op != '':
-                # print(f"Test node op")
-                allocation_nodes = self.find_all_allocations(node_op, node_op, file_type)
-                de_allocation_nodes = self.find_de_allocations(file_type, node_op)
-            # print(f"Test de_allocation nodes are {de_allocation_nodes}")
-            if not de_allocation_nodes:
-                res = (f"Adding line {line.target_line_no}: '{line.value.strip()}' has potential memory leak risk! "
-                       f"Unable to find the corresponding memory deallocation operation for the variable in the file")
-                return True, res
-            else:
-                risk_nodes = self.has_path_between_source_target(allocation_nodes, de_allocation_nodes)
-                if not risk_nodes:
-                    return False, f"Adding line {line.target_line_no} has no memory leak risk."
-                else:
+
+                if not de_allocation_nodes:
                     res = (f"Adding line {line.target_line_no}: '{line.value.strip()}' has potential memory leak risk! "
-                           f"Ensure that the corresponding memory release operation exists in the program")
+                        f"Unable to find the corresponding memory deallocation operation for the variable in the file")
                     return True, res
+                else:
+                    risk_nodes = self.has_path_between_source_target(allocation_nodes, de_allocation_nodes)
+                    if not risk_nodes:
+                        return False, f"Adding line {line.target_line_no} has no memory leak risk."
+                    else:
+                        res = (f"Adding line {line.target_line_no}: '{line.value.strip()}' has potential memory leak "
+                               f"risk! Ensure that the corresponding memory release operation exists in the program")
+                        return True, res
+            else:
+                return False, f"Adding line {line.target_line_no} has no memory leak risk."
         return False, "Can not find potential memory leak risk for current committed line"
 
     def get_line_no_by_node(self, node_id: str) -> str:
@@ -132,13 +119,16 @@ class MemoryLeakAnalyzer:
             print("The matching node is NULL")
         else:
             for node, data in matching_nodes:
+                # print(f'Test, node and data are {node}, {data}')
                 # 直接场景，找到malloc/calloc/realloc的函数调用
                 # TBD:改file_name
                 if (data['label'] == 'CALL'
-                        and ('CODE' in data) and (data_check(data['CODE'], self.allocation_funcs)
-                                                  and data['METHOD_FULL_NAME'] == '<operator>.assignment')):
+                        and ('CODE' in data) and ((data_check(data['CODE'], self.allocation_funcs)
+                                                   and data['METHOD_FULL_NAME'] == '<operator>.assignment')
+                                                  or data['METHOD_FULL_NAME'] in self.allocation_funcs)):
                     var_name, var_id = self.get_var_name_node(node)
                     node_id = var_id
+                    break
         return node_id, var_name
 
     # 获取对应node_id的赋值变量和node
@@ -238,11 +228,7 @@ class MemoryLeakAnalyzer:
     def has_path_between_source_target(self, allocation_nodes: set, de_allocation_nodes: set) -> set:
         # 查找分配节点和释放节点时已经计算了被操作的变量是同一个，这里通过通路计算分配和释放之间是否存在通路，且通路中不存在条件控制节点
         last_source_nodes = set()
-        # 1）从cpg中抽取数据流与控制流相关的子图,主要针对数据流，不要POST_DOMINATE边，会出现错误,CFG和DOMINATE的边加入导致通路增加
-        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'AST']
-        data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] in edge_type]
-        # 2）创建一个精简图
-        data_flow_graph = nx.MultiDiGraph(data_flow_edges)
+        # 使用数据流与控制流相关的子图,主要针对数据流，不要POST_DOMINATE边，会出现错误,CFG和DOMINATE的边加入导致通路增加
         visited = set()
         for allocation_node in allocation_nodes:
             has_path = False
@@ -250,7 +236,7 @@ class MemoryLeakAnalyzer:
                 try:
                     # path = nx.shortest_path(data_flow_graph, allocation_node, de_allocation_node)
                     # print(f"Path from {allocation_node} to {de_allocation_node} is {path}")
-                    if (nx.has_path(data_flow_graph, allocation_node, de_allocation_node) and
+                    if (nx.has_path(self.data_flow_graph, allocation_node, de_allocation_node) and
                             not has_condition_node_in_path(self.cpg, allocation_node, de_allocation_node) and
                             (de_allocation_node not in visited)):
                         has_path = True

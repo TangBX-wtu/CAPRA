@@ -15,6 +15,7 @@ def find_method_node(cpg: nx.MultiDiGraph, node_id: str):
             for source, target, edge_attr in cpg.edges(n, data=True):
                 if edge_attr.get('label', '').strip() == 'CONTAINS':
                     contained_nodes.append(target)
+                    '''
                     # 递归查找更深层次包含的节点
                     to_check = [target]
                     while to_check:
@@ -23,7 +24,7 @@ def find_method_node(cpg: nx.MultiDiGraph, node_id: str):
                             if e_attr.get('label', '').strip() == 'CONTAINS':
                                 contained_nodes.append(t)
                                 to_check.append(t)
-
+                    '''
             if node_id in contained_nodes:
                 return n
     return ''
@@ -33,11 +34,9 @@ def get_method_name(cpg: nx.MultiDiGraph, method_node: str):
     # 从METHOD节点获取函数名
     if method_node == '':
         return ''
-    label = cpg.nodes[method_node].get('label', '')
-    match = re.search(r'NAME="([^"]+)"', label)
-    if match:
-        return match.group(1)
-    return ''
+    name = cpg.nodes[method_node].get('NAME', '')
+    # print(f'Test name is {name}')
+    return name
 
 
 def find_contained_nodes(cpg: nx.MultiDiGraph, method_id: str):
@@ -52,82 +51,68 @@ def find_contained_nodes(cpg: nx.MultiDiGraph, method_id: str):
                 to_check.append(t)
     return contained
 
+def find_caller(cpg: nx.MultiDiGraph, method_id: str):
+    call_nodes = set()
+    if cpg.has_node(method_id):
+        for s in cpg.predecessors(method_id):
+            edge_data = cpg.get_edge_data(s, method_id)
+            for key, attr in edge_data.items():
+                if 'label' in attr and attr['label'] == 'CALL':
+                    call_nodes.add(s)
+    return call_nodes
 
-def build_call_graph(cpg: nx.MultiDiGraph):
-    # 构建完整的函数调用图
-    call_graph = nx.DiGraph()
-
-    # 查找所有函数定义
-    methods = {}
-    for n, attr in cpg.nodes(data=True):
-        if 'label' in attr and attr['label'].startswith('METHOD '):
-            name_match = re.search(r'NAME="([^"]+)"', attr['label'])
-            if name_match and not name_match.group(1).startswith('<'):
-                methods[n] = name_match.group(1)
-
-    # 找出所有CALL边
-    for method_id, method_name in methods.items():
-        # 查找该方法内的所有调用
-        for node_id in find_contained_nodes(cpg, method_id):
-            for s, t, attr in cpg.out_edges(node_id, data=True):
-                if attr.get('label', '').strip() == 'CALL':
-                    target_label = cpg.nodes[t].get('label', '')
-                    target_match = re.search(r'METHOD_FULL_NAME="([^"]+)"', target_label)
-                    if target_match:
-                        called_name = target_match.group(1)
-                        if not called_name.startswith('<operator>'):
-                            call_graph.add_edge(method_name, called_name)
-
-    return call_graph
+def find_caller_path(cpg: nx.MultiDiGraph, method_id: str, caller_path: list):
+    if len(caller_path) == 0:
+        caller_path.append(method_id)
+    caller_nodes = find_caller(cpg, method_id)
+    for node in caller_nodes:
+        if caller_path[0] != method_id:
+            caller_path.insert(0, method_id)
+        caller_path.insert(0, node)
+        caller_method_id = find_method_node(cpg, node)
+        caller_path.insert(0, caller_method_id)
+        find_caller_path(cpg, caller_method_id, caller_path)
 
 
-def find_common_callers(call_graph: nx.DiGraph, method1: str, method2: str):
-    # 找到同时调用两个函数的函数
-    callers1 = set()
-    callers2 = set()
+def is_in_caller_path(caller_paths: list, caller_id: str):
+    for curr in caller_paths:
+        if curr == caller_id:
+            return True
+    return False
 
-    for s, t in call_graph.edges():
-        if t == method1:
-            callers1.add(s)
-        if t == method2:
-            callers2.add(s)
+def find_common_callers(path1: list, path2: list):
+    res = set()
+    for caller_1 in path1:
+        for caller_2 in path2:
+            if caller_1 == caller_2:
+                res.add(caller_1)
+    return res
 
-    return callers1.intersection(callers2)
 
+def determine_call_order_in_function(callers: set, path1: list, path2: list):
+    for caller in callers:
+        method1_matches = [(index, item) for index, item in enumerate(path1) if item == caller]
+        method2_matches = [(index, item) for index, item in enumerate(path2) if item == caller]
+        method1_caller_location = []
+        method2_caller_location = []
 
-def determine_call_order_in_function(cpg: nx.MultiDiGraph, function_name: str, method1: str, method2: str):
-    # 确定函数内调用顺序
-    # 找到函数节点
-    function_node = None
-    for n, attr in cpg.nodes(data=True):
-        if 'label' in attr and f'NAME="{function_name}"' in attr['label']:
-            function_node = n
-            break
+        for index, item in method1_matches:
+            caller_location_index = index + 1
+            if caller_location_index < len(path1):
+                caller_location_id = path1[caller_location_index]
+                method1_caller_location.append(int(caller_location_id))
+        for index, item in method2_matches:
+            caller_location_index = index + 1
+            if caller_location_index < len(path2):
+                caller_location_id = path2[caller_location_index]
+                method2_caller_location.append(int(caller_location_id))
 
-    if not function_node:
-        return unknown
-
-    # 找到函数内的所有调用
-    calls = []
-    for node_id in find_contained_nodes(cpg, function_node):
-        node_label = cpg.nodes[node_id].get('label', '')
-        if 'CALL' in node_label:
-            match = re.search(r'METHOD_FULL_NAME="([^"]+)".*LINE_NUMBER=(\d+)', node_label)
-            if match and (match.group(1) == method1 or match.group(1) == method2):
-                calls.append((int(match.group(2)), match.group(1)))
-
-    # 按行号排序
-    calls.sort(key=lambda x: x[0])
-
-    methods_order = [call[1] for call in calls]
-    if method1 in methods_order and method2 in methods_order:
-        if methods_order.index(method1) < methods_order.index(method2):
-            # print(f'Test, 函数{function_name}先调用{method1}再调用{method2}')
+        method1_caller_location.sort()
+        method2_caller_location.sort()
+        if method1_caller_location[0] < method2_caller_location[0]:
             return pre
-        else:
-            # print(f'Test, 函数{function_name}先调用{method2}再调用{method1}')
+        elif method1_caller_location[0] > method2_caller_location[0]:
             return post
-
     return unknown
 
 
@@ -160,7 +145,7 @@ def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
     # 确定两个节点的执行顺序
     method1 = find_method_node(cpg, node1)
     method2 = find_method_node(cpg, node2)
-    # print(f'Test method1 is {method1}, method2 is {method2}')
+    # print(f'Test method1 of {node1} is {method1}, method2 of {node2} is {method2}')
     if method1 != '' and method2 != '' and method1 == method2:
         # 在同一函数内，使用CFG边和node id大小判断
         try:
@@ -180,27 +165,27 @@ def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
         # 在不同函数中
         method1_name = get_method_name(cpg, method1)
         method2_name = get_method_name(cpg, method2)
+        # print(f'Test method1_name of {node1} is {method1_name}, method2_name of {node2} is {method2_name}')
         if method1_name == '' or method2_name == '':
             return unknown
-        # 构建完整的函数调用图
-        call_graph = build_call_graph(cpg)
-
-        # 检查函数间直接调用关系
-        if nx.has_path(call_graph, method1_name, method2_name):
-            # print(f'Test, 节点{node1}({method1_name})在节点{node2}({method2_name})之前执行')
-            return pre
-        elif nx.has_path(call_graph, method2_name, method1_name):
-            # print(f'Test, 节点{node2}({method2_name})在节点{node1}({method1_name})之前执行')
+        # 向前遍历找到每个函数的函数级调用链
+        method1_caller_paths = list()
+        find_caller_path(cpg, method1, method1_caller_paths)
+        method2_caller_paths = list()
+        find_caller_path(cpg, method2, method2_caller_paths)
+        # print(f'Test, method1 caller path is {method1_caller_paths}')
+        # print(f'Test, method2 caller path is {method2_caller_paths}')
+        if is_in_caller_path(method1_caller_paths, method2):
             return post
 
+        if is_in_caller_path(method2_caller_paths, method1):
+            return pre
+
         # 检查共同调用源
-        common_callers = find_common_callers(call_graph, method1_name, method2_name)
-        if common_callers:
-            # 分析在共同调用者中的调用顺序
-            for caller in common_callers:
-                order = determine_call_order_in_function(cpg, caller, method1_name, method2_name)
-                if order:
-                    return order
+        common_callers = find_common_callers(method1_caller_paths, method2_caller_paths)
+        if len(common_callers) != 0:
+            order = determine_call_order_in_function(common_callers, method1_caller_paths, method2_caller_paths)
+            return order
 
         # 检查程序执行顺序（文件、行号等）
         return compare_program_order(cpg, method1, method2, node1, node2)

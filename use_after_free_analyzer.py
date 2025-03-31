@@ -83,13 +83,12 @@ class UseAfterFreeAnalyzer:
                 else:
                     print("UAF detection: Cannot find corresponding memory free nodes in this CPG")
         else:
-            # print("UAF Test source")
             # 1.检查删除line中是否是清理赋值NULL
             # 2.若删除了var = NULL操作，则先判断指针内存是否被释放，再看变量后续是否还有使用
             # 如果没有操作则可能存在UAF风险（也可能是把整个var使用都删除，这个时候留给审核者），如果后面还有同变量内存相关操作，则是空指针
             node, var = self.get_remove_assign_null(matching_nodes)
             if node != '' and var != '':
-                # print(f"remove assign null node is {node}, and var name is {var}")
+                # print(f"Test, remove assign null node is {node}, and var name is {var}")
                 # 判断指针变量指向的内存在前面是否已经被释放
                 de_allocations = self.find_de_allocations(var, node)
                 if len(de_allocations) == 0:
@@ -101,7 +100,10 @@ class UseAfterFreeAnalyzer:
                     has_freed = False
                     for de_allocation in de_allocations:
                         # print(f'Test de_alloction node is {de_allocation}')
-                        if nx.has_path(self.cpg, de_allocation, node):
+                        # order = analyze_nodes_order(self.cpg, de_allocation, node)
+                        # print(f'Test order is {order}')
+                        if (nx.has_path(self.cpg, de_allocation, node)
+                                and analyze_nodes_order(self.cpg, de_allocation, node) == 0):
                             has_freed = True
                             break
                     if not has_freed:
@@ -190,7 +192,6 @@ class UseAfterFreeAnalyzer:
         # reverse_cpg = cpg.reverse(copy=True)
         # 通过代码属性图来判断内存释放操作与制定变量存在关系(de_alloc->target_node是顺序操作，target_node->de_alloc是间接返回)
         if nx.has_path(cpg, de_allocation, target_node) or nx.has_path(cpg, target_node, de_allocation):
-            # print(f'Test path from {de_allocation} to {target_node} is {nx.shortest_path(cpg, de_allocation, target_node)}')
             # 遍历NULL赋值节点是否是在内存释放之后进行
             for node in assign_null_nodes:
                 if (nx.has_path(cpg, de_allocation, node) and analyze_nodes_order(self.cpg, de_allocation, node) == 0
@@ -199,7 +200,9 @@ class UseAfterFreeAnalyzer:
                         # 内存释放节点和内存操作节点之间如果存在赋值NULL，则可能存在空指针漏洞
                         return self.NULL_POINT_VUL
             # 内存释放节点和内存操作节点之间如果存在通路，但是又没有将指针设置为NULL，则存在UAF漏洞
-            return self.UAF_VUL
+            if analyze_nodes_order(self.cpg, de_allocation, target_node) == 0:
+                return self.UAF_VUL
+            return self.SAFE
         # 如果没有直接路径，但是是对同一个内存地址操作，那么free在use之前也是认为存在UAF漏洞。
         # 在查询dealloc时已经判断了是同一地址，那么就需要判断free和use的顺序，或者说这里需要的就是一个执行顺序的计算逻辑
         elif analyze_nodes_order(self.cpg, de_allocation, target_node) == 0:
