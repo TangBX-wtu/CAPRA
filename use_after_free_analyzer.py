@@ -16,7 +16,7 @@ class UseAfterFreeAnalyzer:
 
     def __init__(self, cpg: nx.MultiDiGraph, strict: bool):
         self.cpg = cpg
-        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'REF']
+        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'REF', 'CFG']
         # data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] in edge_type]
         data_flow_edges = [
             (u, v) for (u, v, d) in self.cpg.edges(data=True)
@@ -60,10 +60,14 @@ class UseAfterFreeAnalyzer:
                         risk_no.append(res_no)
                         results_str.append(res_str)
             # 选择结果中风险系数最高的，strict模式在results中已经呈现
-            if any(results):
-                min_value = min(risk_no)
-                min_index = risk_no.index(min_value)
-                return True, results_str[min_index]
+            # print(f'Test {results}, {risk_no}, {results_str}')
+            if len(results) != 0:
+                if any(results):
+                    min_value = min(risk_no)
+                    min_index = risk_no.index(min_value)
+                    return True, results_str[min_index]
+                else:
+                    return False, "Can not find potential UAF risk for current committed line"
 
             # 如果是变量内存操作节点，则分析该变量是否在之前被free
             node, var = get_var_operation_node(self.cpg, matching_nodes, self.memory_operation)
@@ -79,7 +83,7 @@ class UseAfterFreeAnalyzer:
                     if len(uses) == 0 or self.is_post_alloc(uses, node):
                         res, res_str = self.result_format(self.SAFE, file_type, line, var)
                     else:
-                        # 这里可能产生误报：如果nullified后面跟着malloc，则会出现误报，但是增加判断逻辑价值不高
+                        # 这里可能产生误报
                         res, res_str = self.result_format(self.NULL_POINT_VUL, file_type, line, var)
                     return res, res_str
 
@@ -139,7 +143,7 @@ class UseAfterFreeAnalyzer:
                     res_no = self.check_use_after_free_by_path(uses, node)
                     res, res_str = self.result_format(res_no, file_type, line, var)
                     return res, res_str
-        return False, "Can not find potential use-after-free risk for current committed line"
+        return False, "Can not find potential UAF risk for current committed line"
 
     def is_post_alloc(self, uses_path: list, nullified_node: str) -> bool:
         post_node = uses_path[0]
@@ -414,7 +418,7 @@ class UseAfterFreeAnalyzer:
         uses = []
         # 在当前函数下文中的使用路径
         uses = self.get_var_use_path(node_id, var, graph)
-        # print(f'Test, uses[] are {uses}')
+        # print(f'Test, uses[] of {node_id} are {uses}')
         # 判断是否与当过前函数入参存在数据关系
         parameters_in, method_id = self.get_current_method_parameter_in(node_id)
         # 判断与当前函数返回值是否存在数据关系

@@ -130,7 +130,7 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
     # 创建缺陷解析器实例
     memory_leak_analyzer = MemoryLeakAnalyzer(graph)
     # strict：严格模式，只返回触发UAF的风险，非严格模式则会一并统计空指针/未成熟漏洞等风险
-    use_after_free_analyzer = UseAfterFreeAnalyzer(graph, True)
+    use_after_free_analyzer = UseAfterFreeAnalyzer(graph, False)
 
     # 获取node和filename之间的映射关系
     nodes_to_file = get_nodes_to_file(graph)
@@ -430,6 +430,7 @@ def main():
         is_root_path = False
         mk_new_diff = False
         mk_new_cpg = False
+        clear_path = False
 
         if args.root == 1:
             is_root_path = True
@@ -438,11 +439,14 @@ def main():
         if args.cpg == 1:
             mk_new_cpg = True
         if args.clear == 1:
-            # 按需删除产生的outA,outB和patch-info
-            clear_intermediate_files(test_case_path)
+            clear_path = True
 
-        # 针对UAF和MemoryLeak下的批量实验，is_root_path为True；单个case实验is_root_path为False
-        execute_by_path(test_case_path, is_root_path, mk_new_diff, mk_new_cpg)
+        if clear_path:
+            # 按需删除产生的outA,outB和patch-info；清理操作和检测操作隔离，避免出现意外情况
+            clear_intermediate_files(test_case_path)
+        else:
+            # 针对UAF和MemoryLeak下的批量实验，is_root_path为True；单个case实验is_root_path为False
+            execute_by_path(test_case_path, is_root_path, mk_new_diff, mk_new_cpg)
 
     except SystemExit:
         print(f"错误：参数格式不正确清使用-h查看帮助")
