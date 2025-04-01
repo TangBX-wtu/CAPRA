@@ -1,6 +1,8 @@
 import re
 import networkx as nx
 
+from static_analyze_util import get_all_nodes_in_method
+
 pre = 0
 post = 1
 unknown = 2
@@ -77,6 +79,7 @@ def find_caller_path(cpg: nx.MultiDiGraph, method_id: str, caller_path: list):
 def is_in_caller_path(caller_paths: list, caller_id: str):
     for curr in caller_paths:
         if curr == caller_id:
+
             return True
     return False
 
@@ -138,6 +141,22 @@ def compare_program_order(cpg: nx.MultiDiGraph, method1: str, method2: str, node
     # print(f'Test, 无法确定节点{node1}和节点{node2}的执行顺序')
     return unknown
 
+def determine_call_order(cpg: nx.MultiDiGraph, callee: str, caller: str, node: str):
+    contain_nodes = get_all_nodes_in_method(cpg, caller)
+    callers_id = find_caller(cpg, callee)
+    for caller_id in callers_id:
+        if caller_id in contain_nodes:
+            if int(node) > int(caller_id):
+                # 注意，这里的pre和post指的是被调用函数在调用函数内部与目标节点的顺序
+                return post
+            else:
+                # 被调用函数在调用函数的内部中，处于被比较节点之前
+                return pre
+        # 如果存在跨级调用，则找到上一级
+        else:
+            method_node = find_method_node(cpg, caller_id)
+            return determine_call_order(cpg, method_node, caller, node)
+    return
 
 def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
     if node1 == node2:
@@ -172,14 +191,27 @@ def determine_execution_order(cpg: nx.MultiDiGraph, node1: str, node2: str):
         method1_caller_paths = list()
         find_caller_path(cpg, method1, method1_caller_paths)
         method2_caller_paths = list()
+        # 函数级的调用关系，不在一个函数内比较时可能出现错误
         find_caller_path(cpg, method2, method2_caller_paths)
         # print(f'Test, method1 caller path is {method1_caller_paths}')
         # print(f'Test, method2 caller path is {method2_caller_paths}')
         if is_in_caller_path(method1_caller_paths, method2):
-            return post
+            # method1在method2之后被执行
+            res = determine_call_order(cpg, method1, method2, node2)
+            if res == pre:
+                return post
+            elif res == post:
+                return pre
+            return unknown
 
         if is_in_caller_path(method2_caller_paths, method1):
-            return pre
+            # method1在method2之前被执行
+            res = determine_call_order(cpg, method2, method1, node1)
+            if res == pre:
+                return pre
+            elif res == post:
+                return post
+            return unknown
 
         # 检查共同调用源
         common_callers = find_common_callers(method1_caller_paths, method2_caller_paths)

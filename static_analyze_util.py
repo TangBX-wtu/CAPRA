@@ -262,6 +262,17 @@ def is_node_in_file(nodes_to_file: dict, node_id: str, file_name: str) -> bool:
     return False
 
 
+def get_all_nodes_in_method(cpg: nx.MultiDiGraph, method_id: str) -> set:
+    contained = set()
+    to_check = [method_id]
+    while to_check:
+        current = to_check.pop(0)
+        for s, t, attr in cpg.out_edges(current, data=True):
+            if attr.get('label', '').strip() == 'CONTAINS':
+                contained.add(t)
+                to_check.append(t)
+    return contained
+
 def get_var_name_node(cpg: nx.MultiDiGraph, node_id: str):
     node = cpg.nodes[node_id]
     # print(f'Test, get_var_name_node node is {node}')
@@ -280,9 +291,12 @@ def get_var_name_node(cpg: nx.MultiDiGraph, node_id: str):
     return '', ''
 
 
-def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes: list) -> str:
+def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes: list, de_alloc_funcs: list) \
+        -> Tuple[str, bool, bool]:
     res_node = ''
     is_equal = False
+    para_in = False
+    para_out = False
     max_node = int(len(cpg.nodes)) + 1
     if func_type == 'release':
         # 如果是函数调用，则找到这个函数的内部，然后确认是否有一个入参（当前我们只考虑一个情况，类似Hypo的figure 7）
@@ -311,24 +325,46 @@ def is_indirect_call_equal(cpg: nx.MultiDiGraph, func_type: str, matching_nodes:
                             # print(f"Test {cpg.nodes[current]}")
                             # TBD：改成data_check()
                             if (cpg.nodes[current].get('label', 'Unknown') == 'CALL'
-                                    and cpg.nodes[current].get('METHOD_FULL_NAME', 'Unknown') in ['free', 'kfree', 'put_device']):
+                                    and cpg.nodes[current].get('METHOD_FULL_NAME', 'Unknown') in de_alloc_funcs):
                                 var_name, var_id = get_var_name_node(cpg, current)
                                 # print(str(are_same_var(cpg, var_id, str(20))))
                                 if var_id != '' and are_same_var(cpg, var_id, str(int(node) + 1)):
-                                    print(f'Find indirect call {func_name}')
+                                    print(f'***Find indirect call {func_name}, pay attention to input params!')
                                     is_equal = True
+                                    para_in = True
                                     break
                             if cpg.nodes[current].get('label', 'Unknown') == 'BINDING' or int(current) + 1 >= max_node:
                                 break
                             current = str(int(current) + 1)
+
+                        # 判断返回值是否在函数内部被释放
+                        nodes_in_method = get_all_nodes_in_method(cpg, node)
+                        return_nodes = []
+                        free_nodes = []
+                        for n in nodes_in_method:
+                            if (cpg.nodes[n].get('label', 'Unknown') == 'CALL'
+                                    and cpg.nodes[n].get('METHOD_FULL_NAME', 'Unknown') in de_alloc_funcs):
+                                var_name, var_id = get_var_name_node(cpg, n)
+                                free_nodes.append(var_id)
+                            if cpg.nodes[n].get('label', 'Unknown') == 'RETURN':
+                                next_node = str(int(n) + 1)
+                                if cpg.nodes[next_node].get('label', 'Unknown') == 'IDENTIFIER':
+                                    return_nodes.append(next_node)
+                        for free_node in free_nodes:
+                            for return_node in return_nodes:
+                                if are_same_var(cpg, free_node, return_node):
+                                    print(f'***Find indirect call {func_name}, pay attention to out params!')
+                                    is_equal = True
+                                    para_out = True
+                                    break
         else:
             print(f"Warning! Can not find the source code of the indirect call {func_name}, "
                   f"please pay attention to following operation.")
     # elif func_type == 'malloc': 从风险的角度暂时不考虑间接的内存分配
     if is_equal:
-        return res_node
+        return res_node, para_in, para_out
     else:
-        return ''
+        return '', para_in, para_out
 
 
 def is_memory_operation(cpg: nx.MultiDiGraph, node_id: str, memory_operation: list) -> bool:

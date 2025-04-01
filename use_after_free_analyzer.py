@@ -4,7 +4,8 @@ from typing import Tuple, Set
 
 from determine_order import analyze_nodes_order, determine_execution_order
 from static_analyze_util import data_check, are_same_var, is_condition_structure, has_condition_node_in_path, \
-    is_indirect_call_equal, get_var_name_node, is_memory_operation, get_var_operation_node, memory_func_init
+    is_indirect_call_equal, get_var_name_node, is_memory_operation, get_var_operation_node, memory_func_init, \
+    get_all_nodes_in_method
 
 
 class UseAfterFreeAnalyzer:
@@ -15,8 +16,12 @@ class UseAfterFreeAnalyzer:
 
     def __init__(self, cpg: nx.MultiDiGraph, strict: bool):
         self.cpg = cpg
-        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'REF', 'CFG']
-        data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] in edge_type]
+        edge_type = ['CALL', 'ARGUMENT', 'RETURN', 'REACHING_DEF', 'REF']
+        # data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] in edge_type]
+        data_flow_edges = [
+            (u, v) for (u, v, d) in self.cpg.edges(data=True)
+            if d['label'] in edge_type and not (d['label'] == 'REACHING_DEF' and d.get('VARIABLE', '') == '')
+        ]
         self.light_cpg = nx.MultiDiGraph(data_flow_edges)
         data_flow_edges = [(u, v) for (u, v, d) in self.cpg.edges(data=True) if d['label'] != 'SOURCE_FILE']
         self.cpg_without_source_file = nx.MultiDiGraph(data_flow_edges)
@@ -30,25 +35,36 @@ class UseAfterFreeAnalyzer:
         if file_type == "target":
             # print("UAF Test target")
             # 针对添加代码场景，分析内存释放操作和变量的使用操作
-            node, var = self.get_free_node(matching_nodes)
-            # 如果是free节点，则分析变量的后续使用情况
-            if var != '' and node != '':
-                # print(f'Test currnt node is {node}')
-                # 在cpg中查找变量var是否还在继续使用
-                uses = self.get_all_use_path(node, var, self.light_cpg)
-                # print(f'Test uses path is {uses}')
-                uses = self.uses_path_clear(matching_nodes, uses)
-                # print(f'Test uses path of {node} is {uses}')
-                if len(uses) == 0:
-                    # print("Test: use len is 0")
-                    res, res_str = self.result_format(self.UAF_RISK, file_type, line, var)
-                    return res, res_str
-                else:
-                    # 需要在uses中找到var = NULL的赋值语句，且是首句
-                    # print(f"Test: use path is: {uses}")
-                    res_no = self.check_use_after_free_by_path(uses, node)
-                    res, res_str = self.result_format(res_no, file_type, line, var)
-                    return res, res_str
+            nodes, vars = self.get_free_node(matching_nodes)
+            # print(f'Test, nodes are {nodes}, vars are {vars}')
+            # 如果是free节点，则分析变量的后续使用情况，考虑到函数间接操作，这里可能有多个变量需要跟踪
+            results = []
+            risk_no = []
+            results_str = []
+            for node, var in zip(nodes, vars):
+                if var != '' and node != '':
+                    # print(f'Test current node is {node}')
+                    uses = self.get_all_use_path(node, var, self.light_cpg)
+                    # print(f'Test uses path is {uses}')
+                    uses = self.uses_path_clear(matching_nodes, uses)
+                    # print(f'Test uses path of {node} is {uses}')
+                    if len(uses) == 0:
+                        res, res_str = self.result_format(self.UAF_RISK, file_type, line, var)
+                        results.append(res)
+                        risk_no.append(self.UAF_RISK)
+                        results_str.append(res_str)
+                    else:
+                        res_no = self.check_use_after_free_by_path(uses, node)
+                        res, res_str = self.result_format(res_no, file_type, line, var)
+                        results.append(res)
+                        risk_no.append(res_no)
+                        results_str.append(res_str)
+            # 选择结果中风险系数最高的，strict模式在results中已经呈现
+            if any(results):
+                min_value = min(risk_no)
+                min_index = risk_no.index(min_value)
+                return True, results_str[min_index]
+
             # 如果是变量内存操作节点，则分析该变量是否在之前被free
             node, var = get_var_operation_node(self.cpg, matching_nodes, self.memory_operation)
             # 反向遍历变量是否被free过：找到全局对应上述变量的free，看看是否有通路
@@ -154,9 +170,9 @@ class UseAfterFreeAnalyzer:
         if n <= 1:
             return uses_path
         for i in range(0, n):
-            for j in range(0, n-i-1):
-                if analyze_nodes_order(self.cpg, uses_path[j], uses_path[j+1]) == 1:
-                    (uses_path[j], uses_path[j+1]) = (uses_path[j+1], uses_path[j])
+            for j in range(0, n - i - 1):
+                if analyze_nodes_order(self.cpg, uses_path[j], uses_path[j + 1]) == 1:
+                    (uses_path[j], uses_path[j + 1]) = (uses_path[j + 1], uses_path[j])
         return uses_path
 
     def uses_path_clear(self, matching_nodes: list, uses_path: list) -> list:
@@ -332,8 +348,8 @@ class UseAfterFreeAnalyzer:
         return de_allocation_nodes
 
     def get_free_node(self, matching_nodes: list):
-        node_id = ''
-        var_name = ''
+        node_id = []
+        var_name = []
         # print(matching_nodes)
         if not matching_nodes:
             print("The matching node is NULL")
@@ -344,17 +360,39 @@ class UseAfterFreeAnalyzer:
                 if (data['label'] == 'CALL'
                         and data['METHOD_FULL_NAME'] in self.deallocation_funcs):
                     # matching nodes是针对某一行的，所以不会出现多个free操作
-                    var_name, node_id = get_var_name_node(self.cpg, node)
+                    name, tmp_id = get_var_name_node(self.cpg, node)
+                    node_id.append(tmp_id)
+                    var_name.append(name)
                     return node_id, var_name
-            func_node = is_indirect_call_equal(self.cpg, 'release', matching_nodes)
+            func_node, para_in, para_out \
+                = is_indirect_call_equal(self.cpg, 'release', matching_nodes, self.deallocation_funcs)
             if func_node != '':
-                # 如果是间接操作，且函数的入参在函数内被释放
-                var_name, node_id = get_var_name_node(self.cpg, func_node)
+                # 如果是间接操作，且函数的入参在函数内被释放，或内部释放后以返回值形式传递地址
+                #
+                if para_in:
+                    name, tmp_id = get_var_name_node(self.cpg, func_node)
+                    if tmp_id != '' and name != '':
+                        node_id.append(tmp_id)
+                        var_name.append(name)
+                if para_out:
+                    in_edges = self.cpg.in_edges(func_node, data=True)
+                    node_set = set(item[0] for item in matching_nodes)
+                    # print(f'Test mathing nodes are {node_set}')
+                    for source, target, edge_data in in_edges:
+                        if (edge_data.get('label') == 'ARGUMENT'
+                                and 'assignment' in self.cpg.nodes[source].get('METHOD_FULL_NAME', 'Unknown')
+                                and source in node_set):
+                            name, tmp_id = get_var_name_node(self.cpg, source)
+                            if tmp_id != '' and name != '':
+                                node_id.append(tmp_id)
+                                var_name.append(name)
         return node_id, var_name
 
     # 遍历变量的使用路径
     def get_var_use_path(self, node_id: str, var: str, graph: nx.MultiDiGraph) -> list:
         uses = set()
+        if graph.has_node(node_id) is False:
+            return list(uses)
         # 因为是跟踪变量的使用情况，所以这里需要在light_cpg中遍历
         for succ in nx.dfs_preorder_nodes(graph, node_id):
             node_type = self.cpg.nodes[succ].get('label', 'Unknown')
@@ -368,6 +406,7 @@ class UseAfterFreeAnalyzer:
                 if (current_node != '' and are_same_var(self.cpg, node_id, current_node)
                         and analyze_nodes_order(self.cpg, node_id, current_node) == 0):
                     uses.add(current_node)
+        # print(f'Test, current node is {node_id}, new path is {list(uses)}')
         return list(uses)
 
     # 创建一个新的函数get_all_use_path，先从当前函数开始分析，再从入参调用开始分析
@@ -375,9 +414,13 @@ class UseAfterFreeAnalyzer:
         uses = []
         # 在当前函数下文中的使用路径
         uses = self.get_var_use_path(node_id, var, graph)
-        # print(f'uses[] are {uses}')
+        # print(f'Test, uses[] are {uses}')
         # 判断是否与当过前函数入参存在数据关系
         parameters_in, method_id = self.get_current_method_parameter_in(node_id)
+        # 判断与当前函数返回值是否存在数据关系
+        same_para_out = self.get_current_method_parmater_out(method_id, node_id)
+        # 排除返回空值等异常数据
+        same_para_out = list(set(same_para_out) & set(uses))
         # 记录存在数据关系的入参
         same_para_in = []
         if len(parameters_in) != 0:
@@ -387,14 +430,39 @@ class UseAfterFreeAnalyzer:
                     same_para_in.append(index)
         # 如果存在数据传递关系，找到函数的调用位置，跟踪其在后续代码中的路径
         if len(same_para_in) != 0:
-            vars_id = self.find_method_caller(method_id, same_para_in)
+            vars_id = self.find_method_caller_with_para_in(method_id, same_para_in)
             # print(f'Test vars_id are {vars_id}')
             # 从调用位置更新后续使用的路径
             if len(vars_id) != 0:
                 for var_id in vars_id:
+                    uses.append(var_id)
                     new_path = self.get_var_use_path(var_id, var, graph)
                     uses.extend(new_path)
+        # 如果与返回值存在关系，则找到函数调用位置的数据接收变量，继续跟踪后续路径
+        if len(same_para_out) != 0:
+            # print(f'Test, same_para_out is {same_para_out}')
+            vars_id = self.find_method_caller_with_para_out(method_id)
+            # print(f'Test, vars_id is {vars_id}')
+            for var_id in vars_id:
+                uses.append(var_id)
+                new_path = self.get_var_use_path(var_id, var, graph)
+                uses.extend(new_path)
         return uses
+
+    # 获得当前函数的所有返回值
+    def get_current_method_parmater_out(self, method_id: str, current_id: str) -> list:
+        para_out = []
+        if method_id == '' or method_id is None or self.cpg.has_node(method_id) is False:
+            return para_out
+        # 找到当前函数的所有节点
+        contained = get_all_nodes_in_method(self.cpg, method_id)
+        for node in contained:
+            if self.cpg.nodes[node].get('label', 'Unknown') == 'RETURN':
+                next_node = str(int(node) + 1)
+                if (self.cpg.nodes[next_node].get('label', 'Unknown') == 'IDENTIFIER'
+                        and are_same_var(self.cpg, current_id, next_node)):
+                    para_out.append(next_node)
+        return para_out
 
     # 获得当前节点所在函数的入参
     def get_current_method_parameter_in(self, current_id) -> Tuple[list, str]:
@@ -419,7 +487,29 @@ class UseAfterFreeAnalyzer:
                     break
         return parameters_in, method_node
 
-    def find_method_caller(self, method_id: str, param_index: list):
+    def find_method_caller_with_para_out(self, method_id: str) -> list:
+        method_name = self.cpg.nodes[method_id].get('NAME', 'Unknown')
+        callers_id = []
+        vars_id = []
+        for node, data in self.cpg.nodes(data=True):
+            if ('label' in data and 'METHOD_FULL_NAME' in data
+                    and data['label'] == 'CALL' and data['METHOD_FULL_NAME'] == method_name):
+                callers_id.append(node)
+        for caller_id in callers_id:
+            if self.cpg.nodes[caller_id].get('ARGUMENT_INDEX', 'Unknown') == '-1':
+                var_name, var_id = get_var_name_node(self.cpg, caller_id)
+                vars_id.append(var_id)
+            else:
+                # 通过argument边找到赋值语句
+                in_edges = self.cpg.in_edges(caller_id, data=True)
+                for source, target, edge_data in in_edges:
+                    if (edge_data.get('label') == 'ARGUMENT'
+                            and 'assignment' in self.cpg.nodes[source].get('METHOD_FULL_NAME', 'Unknown')):
+                        var_name, var_id = get_var_name_node(self.cpg, source)
+                        vars_id.append(var_id)
+        return vars_id
+
+    def find_method_caller_with_para_in(self, method_id: str, param_index: list) -> list:
         method_name = self.cpg.nodes[method_id].get('NAME', 'Unknown')
         callers_id = []
         vars_id = []

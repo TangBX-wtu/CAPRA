@@ -103,8 +103,9 @@ class MemoryLeakAnalyzer:
                         and data_check(data['METHOD_FULL_NAME'], self.deallocation_funcs)):
                     var_name, node_id = self.get_var_name_node(node)
                     return node_id, var_name
-            func_node = is_indirect_call_equal(self.cpg, 'release', matching_nodes)
-            if func_node != '':
+            func_node, para_in, para_out \
+                = is_indirect_call_equal(self.cpg, 'release', matching_nodes, self.deallocation_funcs)
+            if func_node != '' and para_in:
                 # 如果是间接操作，且函数的入参在函数内被释放
                 # print(f"Test indirect_call func_node is {func_node}")
                 self.indirect_call_func = self.cpg.nodes[func_node].get('METHOD_FULL_NAME', 'Unknown')
