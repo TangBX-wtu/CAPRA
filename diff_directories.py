@@ -7,17 +7,7 @@ import unidiff  # 用于验证生成的patch文件
 
 
 def generate_diff(dir_a: str, dir_b: str, patch_file: str) -> bool:
-    """
-    比较两个目录的差异并生成patch文件
 
-    Args:
-        dir_a: 源目录路径
-        dir_b: 目标目录路径
-        patch_file: 生成的patch文件路径
-
-    Returns:
-        bool: 操作是否成功
-    """
     try:
         # 确保目录存在
         if not os.path.isdir(dir_a) or not os.path.isdir(dir_b):
