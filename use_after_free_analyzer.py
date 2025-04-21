@@ -88,10 +88,10 @@ class UseAfterFreeAnalyzer:
                     return res, res_str
 
                 de_allocations = self.find_de_allocations(var, node)
-                # print(f'Test de_allocations nodes are {de_allocations}')
+
                 if len(de_allocations) != 0:
                     # print(f"Test, free nodes are {de_allocations}")
-                    all_assign_null_nodes = self.get_all_assign_null_node(self.cpg, node)
+                    all_assign_null_nodes = self.get_all_assign_null_node_v2(self.cpg, node)
                     # print(f"Test, nullified nodes are {all_assign_null_nodes}")
                     # 检测free节点和var节点之间是否有通路，通路中是否设置了NULL
                     for de_allocation in de_allocations:
@@ -106,6 +106,7 @@ class UseAfterFreeAnalyzer:
             # 1.检查删除line中是否是清理赋值NULL
             # 2.若删除了var = NULL操作，则先判断指针内存是否被释放，再看变量后续是否还有使用
             # 如果没有操作则可能存在UAF风险（也可能是把整个var使用都删除，这个时候留给审核者），如果后面还有同变量内存相关操作，则是空指针
+            # print(f'UAF test source')
             node, var = self.get_remove_assign_null(matching_nodes)
             if node != '' and var != '':
                 # print(f"Test, remove assign null node is {node}, and var name is {var}")
@@ -205,6 +206,39 @@ class UseAfterFreeAnalyzer:
             if self.is_assign_null(node, target_node):
                 nodes.add(node)
         return nodes
+
+    def get_all_assign_null_node_v2(self, cpg: nx.MultiDiGraph, target_node) -> set:
+        null_assignments = set()
+        assignment_nodes = [
+            node_id for node_id in cpg.nodes
+            if cpg.nodes[node_id].get('label') == 'CALL'
+               and cpg.nodes[node_id].get('METHOD_FULL_NAME') == '<operator>.assignment'
+        ]
+
+        for node_id in assignment_nodes:
+            node_var = str(int(node_id) + 1)
+            node_null = str(int(node_id) + 2)
+
+            # 检查后续两个节点是否存在
+            if not (cpg.has_node(node_var) and cpg.has_node(node_null)):
+                continue
+
+            # 获取节点属性
+            var_label = cpg.nodes[node_var].get('label', 'Unknown')
+            var_arg_index = cpg.nodes[node_var].get('ARGUMENT_INDEX', 0)
+            null_label = cpg.nodes[node_null].get('label', 'Unknown')
+            null_arg_index = cpg.nodes[node_null].get('ARGUMENT_INDEX', 0)
+            null_name = cpg.nodes[node_null].get('NAME', 'Unknown')
+
+            # 检查节点属性是否符合条件
+            if (var_label == 'IDENTIFIER' and var_arg_index == '1'
+                    and null_label == 'IDENTIFIER' and null_arg_index == '2'
+                    and null_name == 'NULL'):
+                # 检查变量是否相同
+                if are_same_var(self.cpg, node_var, target_node):
+                    null_assignments.add(node_id)
+
+        return null_assignments
 
     def check_use_after_free_by_var(self, cpg: nx.MultiDiGraph, assign_null_nodes: set,
                                     de_allocation: str, target_node: str) -> int:
@@ -307,7 +341,10 @@ class UseAfterFreeAnalyzer:
             has_uaf = self.UAF_RISK
         return has_uaf
 
-    def is_assign_null(self, node_id: str, target_node: str) -> bool:
+    def is_assign_null(self, node_id: str, target_node: str, depth: int = 0, max_depth: int = 5) -> bool:
+        if depth >= max_depth:
+            return False
+        # print(f'Test is assign null {depth}')
         node_type = self.cpg.nodes[node_id].get('label', 'Unknown')
         if node_type == 'CALL':
             if self.cpg.nodes[node_id].get('METHOD_FULL_NAME', 'Unknown') == '<operator>.assignment':
@@ -329,7 +366,7 @@ class UseAfterFreeAnalyzer:
             order = self.cpg.nodes[node_id].get('ORDER', 'Unknown')
             if order != 'Unknown':
                 pre_node = str(int(node_id) - int(order))
-                return self.is_assign_null(pre_node, target_node)
+                return self.is_assign_null(pre_node, target_node, depth + 1, max_depth)
         return False
 
     def find_de_allocations(self, var: str, node_id: str) -> Set[str]:
@@ -341,7 +378,7 @@ class UseAfterFreeAnalyzer:
             if ('CODE' in data) and (data_check(data['CODE'], self.deallocation_funcs)
                                      and data['label'] == 'CALL'
                                      and data['METHOD_FULL_NAME'] in self.deallocation_funcs):
-                # print(f"Test Code of current data is {data}")
+                print(f"Test: code of current data is {data}")
                 # 计算被释放的变量节点
                 var_name, var_node = get_var_name_node(self.cpg, node)
                 # print(f"Test3: node {var_node} and node {node_id}")

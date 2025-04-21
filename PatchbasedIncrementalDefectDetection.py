@@ -69,9 +69,9 @@ def generate_cpg(code_path):
     if os.path.exists(code_path + '/b/outB'):
         os.system(f"sudo rm -rf {code_path}/b/outB")
 
-    os.system(f"cd /home/tbx/bin/joern/joern-cli/; sudo ./joern-parse {code_path}/a;"
+    os.system(f"cd /home/tbx/bin/joern/joern-cli/; sudo ./joern-parse -J-Xmx10G {code_path}/a;"
               f" sudo ./joern-export --repr=all --format=dot --out {code_path}/a/outA")
-    os.system(f"cd /home/tbx/bin/joern/joern-cli/; sudo ./joern-parse {code_path}/b;"
+    os.system(f"cd /home/tbx/bin/joern/joern-cli/; sudo ./joern-parse -J-Xmx10G {code_path}/b;"
               f" sudo ./joern-export --repr=all --format=dot --out {code_path}/b/outB")
 
 
@@ -130,7 +130,7 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
     # 创建缺陷解析器实例
     memory_leak_analyzer = MemoryLeakAnalyzer(graph)
     # strict：严格模式，只返回触发UAF的风险，非严格模式则会一并统计空指针/未成熟漏洞等风险
-    use_after_free_analyzer = UseAfterFreeAnalyzer(graph, False)
+    use_after_free_analyzer = UseAfterFreeAnalyzer(graph, True)
 
     # 获取node和filename之间的映射关系
     nodes_to_file = get_nodes_to_file(graph)
@@ -166,7 +166,6 @@ def analyze_graph(lines, dot_file_path, file_type, file_name, case_path):
             ml_end_time = time.time()
             print(f'Memory leak analysis for a single line takes time: {(ml_end_time - ml_start_time) * 1000:.3f} ms')
             # print(f"Test res_str of memory leak analyze is {res_str}")
-
             if risk:
                 risk_set.add(res_str)
                 update_result(case_path, 'MemoryLeak', risk)
@@ -304,7 +303,7 @@ def execute_by_path(test_case_path: str, is_root_path: bool, mk_new_diff: bool, 
     else:
         # 注意！根目录批量实验只针对UAF/MemoryLeak两个目录，因为目录遍历规则是固定的
         if not test_case_path.endswith('UAF') and not test_case_path.endswith('MemoryLeak'):
-            print(f'Error path! batch testing is only supported for the UAF and MemoryLeak directories.')
+            print(f'Error path! Batch testing is only supported for the UAF and MemoryLeak directories.')
         else:
             bad_path = test_case_path + "/bad"
             good_path = test_case_path + "/good"
@@ -418,7 +417,6 @@ def main():
 
     try:
         args = parser.parse_args()
-        # print(f"Test, -p {args.param} -r {args.root} -d {args.diff} -c {args.cpg} -C {args.clear}")
         # 初始化结果文件
         init_result_file()
         # 对测试用例的数据进行预处理，输入为测试用例目录，创建diff文件，生成patch文件和cpg文件
@@ -426,6 +424,7 @@ def main():
         # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/UAF/bad/Removement/testcase_15"
         # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/Hypocrite-Commit/case_3"
         # test_case_path = "/home/tbx/workspace/DataSet-2022-08-11-juliet/CVE-2019012819"
+        # exm: python3 PatchbasedIncrementalDefectDetection.py -p /home/tbx/workspace/DataSet-2022-08-11-juliet/Linux-openssh/Linux/testcase_04 -d 1 -c 1
         test_case_path = args.param
         is_root_path = False
         mk_new_diff = False
