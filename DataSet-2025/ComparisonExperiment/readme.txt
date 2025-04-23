@@ -1,0 +1,3 @@
+This dataset is used for comparison with other static detection tools and contains the following: 
+1）Based on the variant of the SARD dataset, only the post-patched files are retained, and the code irrelevant to this submission and the vulnerability chain is deleted to prevent interference.
+2）The legitimate commits in real-world scenarios are consistent with the dataset in the CAPRA performance test.
